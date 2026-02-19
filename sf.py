@@ -16,19 +16,13 @@ import logging
 import multiprocessing as mp
 import os
 import os.path
-import random
 import signal
 import sys
 import time
 from copy import deepcopy
 
-import cherrypy
-import cherrypy_cors
-from cherrypy.lib import auth_digest
-
 from sflib import SpiderFoot
 from sfscan import startSpiderFootScanner
-from sfwebui import SpiderFootWebUi
 from spiderfoot import SpiderFootHelpers
 from spiderfoot import SpiderFootDb
 from spiderfoot import SpiderFootCorrelator
@@ -130,7 +124,7 @@ def main() -> None:
     if args.q:
         sfConfig['__logging'] = False
 
-    loggingQueue = mp.Queue()
+    loggingQueue = mp.get_context("spawn").Queue()
     logListenerSetup(loggingQueue, sfConfig)
     logWorkerSetup(loggingQueue)
     log = logging.getLogger(f"spiderfoot.{__name__}")
@@ -141,7 +135,11 @@ def main() -> None:
     # Load each module in the modules directory with a .py extension
     try:
         mod_dir = os.path.dirname(os.path.abspath(__file__)) + '/modules/'
-        sfModules = SpiderFootHelpers.loadModulesAsDict(mod_dir, ['sfp_template.py'])
+        sfModules = SpiderFootHelpers.loadModulesAsDict(mod_dir, [
+            'sfp_template.py',
+            'sfp_threatcrowd.py',   # Service defunct (invalid SSL cert)
+            'sfp_phishstats.py',    # Service unreliable (consistently times out)
+        ])
     except BaseException as e:
         log.critical(f"Failed to load modules: {e}", exc_info=True)
         sys.exit(-1)
@@ -466,69 +464,42 @@ def start_web_server(sfWebUiConfig: dict, sfConfig: dict, loggingQueue=None) -> 
         sfConfig (dict): SpiderFoot config options
         loggingQueue (Queue): main SpiderFoot logging queue
     """
+    import uvicorn
+    from api.app import create_app
+
     log = logging.getLogger(f"spiderfoot.{__name__}")
 
     web_host = sfWebUiConfig.get('host', '127.0.0.1')
     web_port = sfWebUiConfig.get('port', 5001)
-    web_root = sfWebUiConfig.get('root', '/')
-    cors_origins = sfWebUiConfig.get('cors_origins', [])
-
-    cherrypy.config.update({
-        'log.screen': False,
-        'server.socket_host': web_host,
-        'server.socket_port': int(web_port)
-    })
 
     log.info(f"Starting web server at {web_host}:{web_port} ...")
 
-    # Enable access to static files via the web directory
-    conf = {
-        '/query': {
-            'tools.encode.text_only': False,
-            'tools.encode.add_charset': True,
-        },
-        '/static': {
-            'tools.staticdir.on': True,
-            'tools.staticdir.dir': 'static',
-            'tools.staticdir.root': f"{os.path.dirname(os.path.abspath(__file__))}/spiderfoot"
-        }
-    }
+    app = create_app(
+        config=sfConfig,
+        web_config=sfWebUiConfig,
+        logging_queue=loggingQueue,
+    )
 
-    secrets = dict()
-    passwd_file = SpiderFootHelpers.dataPath() + '/passwd'
-    if os.path.isfile(passwd_file):
-        if not os.access(passwd_file, os.R_OK):
-            log.error("Could not read passwd file. Permission denied.")
+    # Check for SSL certificates
+    ssl_keyfile = None
+    ssl_certfile = None
+    key_path = SpiderFootHelpers.dataPath() + '/spiderfoot.key'
+    crt_path = SpiderFootHelpers.dataPath() + '/spiderfoot.crt'
+    if os.path.isfile(key_path) and os.path.isfile(crt_path):
+        if not os.access(crt_path, os.R_OK):
+            log.critical(f"Could not read {crt_path} file. Permission denied.")
             sys.exit(-1)
+        if not os.access(key_path, os.R_OK):
+            log.critical(f"Could not read {key_path} file. Permission denied.")
+            sys.exit(-1)
+        log.info("Enabling SSL based on supplied key and certificate file.")
+        ssl_keyfile = key_path
+        ssl_certfile = crt_path
 
-        with open(passwd_file, 'r') as f:
-            passwd_data = f.readlines()
-
-        for line in passwd_data:
-            if line.strip() == '':
-                continue
-
-            if ':' not in line:
-                log.error("Incorrect format of passwd file, must be username:password on each line.")
-                sys.exit(-1)
-
-            u = line.strip().split(":")[0]
-            p = ':'.join(line.strip().split(":")[1:])
-
-            if not u or not p:
-                log.error("Incorrect format of passwd file, must be username:password on each line.")
-                sys.exit(-1)
-
-            secrets[u] = p
-
-    if secrets:
-        log.info("Enabling authentication based on supplied passwd file.")
-        conf['/'] = {
-            'tools.auth_digest.on': True,
-            'tools.auth_digest.realm': web_host,
-            'tools.auth_digest.get_ha1': auth_digest.get_ha1_dict_plain(secrets),
-            'tools.auth_digest.key': random.SystemRandom().randint(0, 99999999)
-        }
+    # Check for authentication
+    passwd_file = SpiderFootHelpers.dataPath() + '/passwd'
+    if os.path.isfile(passwd_file) and os.access(passwd_file, os.R_OK):
+        log.info("Authentication enabled based on supplied passwd file.")
     else:
         warn_msg = "\n********************************************************************\n"
         warn_msg += "Warning: passwd file contains no passwords. Authentication disabled.\n"
@@ -537,53 +508,29 @@ def start_web_server(sfWebUiConfig: dict, sfConfig: dict, loggingQueue=None) -> 
         warn_msg += "********************************************************************\n"
         log.warning(warn_msg)
 
-    using_ssl = False
-    key_path = SpiderFootHelpers.dataPath() + '/spiderfoot.key'
-    crt_path = SpiderFootHelpers.dataPath() + '/spiderfoot.crt'
-    if os.path.isfile(key_path) and os.path.isfile(crt_path):
-        if not os.access(crt_path, os.R_OK):
-            log.critical(f"Could not read {crt_path} file. Permission denied.")
-            sys.exit(-1)
-
-        if not os.access(key_path, os.R_OK):
-            log.critical(f"Could not read {key_path} file. Permission denied.")
-            sys.exit(-1)
-
-        log.info("Enabling SSL based on supplied key and certificate file.")
-        cherrypy.server.ssl_module = 'builtin'
-        cherrypy.server.ssl_certificate = crt_path
-        cherrypy.server.ssl_private_key = key_path
-        using_ssl = True
-
-    if using_ssl:
-        url = "https://"
-    else:
-        url = "http://"
-
+    using_ssl = ssl_certfile is not None
+    scheme = "https" if using_ssl else "http"
     if web_host == "0.0.0.0":  # nosec
-        url = f"{url}127.0.0.1:{web_port}"
+        url = f"{scheme}://127.0.0.1:{web_port}"
     else:
-        url = f"{url}{web_host}:{web_port}{web_root}"
-        cors_origins.append(url)
-
-    cherrypy_cors.install()
-    cherrypy.config.update({
-        'cors.expose.on': True,
-        'cors.expose.origins': cors_origins,
-        'cors.preflight.origins': cors_origins
-    })
+        url = f"{scheme}://{web_host}:{web_port}"
 
     print("")
     print("*************************************************************")
     print(" Use SpiderFoot by starting your web browser of choice and ")
     print(f" browse to {url}")
+    print(f" API documentation available at {url}/docs")
     print("*************************************************************")
     print("")
 
-    # Disable auto-reloading of content
-    cherrypy.engine.autoreload.unsubscribe()
-
-    cherrypy.quickstart(SpiderFootWebUi(sfWebUiConfig, sfConfig, loggingQueue), script_name=web_root, config=conf)
+    uvicorn.run(
+        app,
+        host=web_host,
+        port=int(web_port),
+        ssl_keyfile=ssl_keyfile,
+        ssl_certfile=ssl_certfile,
+        log_level="info" if sfConfig.get('_debug') else "warning",
+    )
 
 
 def handle_abort(signal, frame) -> None:
@@ -605,8 +552,8 @@ def handle_abort(signal, frame) -> None:
 
 
 if __name__ == '__main__':
-    if sys.version_info < (3, 7):
-        print("SpiderFoot requires Python 3.7 or higher.")
+    if sys.version_info < (3, 10):
+        print("SpiderFoot requires Python 3.10 or higher.")
         sys.exit(-1)
 
     if len(sys.argv) <= 1:

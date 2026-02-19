@@ -12,11 +12,14 @@
 
 from pathlib import Path
 import hashlib
+import logging
 import random
 import re
 import sqlite3
 import threading
 import time
+
+log = logging.getLogger(f"spiderfoot.{__name__}")
 
 
 class SpiderFootDb:
@@ -105,7 +108,82 @@ class SpiderFootDb:
         "CREATE INDEX idx_scan_results_srchash ON tbl_scan_results (scan_instance_id, source_event_hash)",
         "CREATE INDEX idx_scan_logs ON tbl_scan_log (scan_instance_id)",
         "CREATE INDEX idx_scan_correlation ON tbl_scan_correlation_results (scan_instance_id, id)",
-        "CREATE INDEX idx_scan_correlation_events ON tbl_scan_correlation_results_events (correlation_id)"
+        "CREATE INDEX idx_scan_correlation_events ON tbl_scan_correlation_results_events (correlation_id)",
+        "CREATE TABLE tbl_scan_ai_analysis ( \
+            id                  VARCHAR NOT NULL PRIMARY KEY, \
+            scan_instance_id    VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid), \
+            provider            VARCHAR NOT NULL, \
+            model               VARCHAR NOT NULL, \
+            mode                VARCHAR NOT NULL, \
+            created             INT DEFAULT 0, \
+            status              VARCHAR NOT NULL DEFAULT 'pending', \
+            result_json         TEXT, \
+            token_usage         INT DEFAULT 0, \
+            error               VARCHAR \
+        )",
+        "CREATE INDEX idx_scan_ai_analysis ON tbl_scan_ai_analysis (scan_instance_id)",
+        "CREATE TABLE tbl_scan_ai_chat ( \
+            id                  VARCHAR NOT NULL PRIMARY KEY, \
+            scan_instance_id    VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid), \
+            role                VARCHAR NOT NULL, \
+            content             TEXT NOT NULL, \
+            token_usage         INT DEFAULT 0, \
+            created             INT NOT NULL \
+        )",
+        "CREATE INDEX idx_scan_ai_chat ON tbl_scan_ai_chat (scan_instance_id, created)",
+        "CREATE TABLE tbl_correlation_rules ( \
+            id              VARCHAR NOT NULL PRIMARY KEY, \
+            rule_id         VARCHAR NOT NULL UNIQUE, \
+            yaml_content    TEXT NOT NULL, \
+            enabled         INT DEFAULT 1, \
+            created         INT NOT NULL, \
+            updated         INT NOT NULL \
+        )",
+        # ── RBAC tables (Phase 10) ──────────────────────────────────────
+        "CREATE TABLE tbl_users ( \
+            id           VARCHAR NOT NULL PRIMARY KEY, \
+            username     VARCHAR NOT NULL UNIQUE, \
+            password     VARCHAR NOT NULL, \
+            display_name VARCHAR NOT NULL DEFAULT '', \
+            email        VARCHAR NOT NULL DEFAULT '', \
+            is_active    INT NOT NULL DEFAULT 1, \
+            created      INT NOT NULL DEFAULT 0, \
+            updated      INT NOT NULL DEFAULT 0 \
+        )",
+        "CREATE TABLE tbl_roles ( \
+            id          VARCHAR NOT NULL PRIMARY KEY, \
+            name        VARCHAR NOT NULL UNIQUE, \
+            description VARCHAR NOT NULL DEFAULT '' \
+        )",
+        "CREATE TABLE tbl_permissions ( \
+            id       VARCHAR NOT NULL PRIMARY KEY, \
+            resource VARCHAR NOT NULL, \
+            action   VARCHAR NOT NULL, \
+            UNIQUE(resource, action) \
+        )",
+        "CREATE TABLE tbl_user_roles ( \
+            user_id VARCHAR NOT NULL, \
+            role_id VARCHAR NOT NULL, \
+            PRIMARY KEY (user_id, role_id) \
+        )",
+        "CREATE TABLE tbl_role_permissions ( \
+            role_id       VARCHAR NOT NULL, \
+            permission_id VARCHAR NOT NULL, \
+            PRIMARY KEY (role_id, permission_id) \
+        )",
+        "CREATE TABLE tbl_audit_log ( \
+            id          VARCHAR NOT NULL PRIMARY KEY, \
+            user_id     VARCHAR NOT NULL, \
+            username    VARCHAR NOT NULL, \
+            action      VARCHAR NOT NULL, \
+            resource    VARCHAR NOT NULL, \
+            resource_id VARCHAR NOT NULL DEFAULT '', \
+            details     VARCHAR NOT NULL DEFAULT '', \
+            ip_address  VARCHAR NOT NULL DEFAULT '', \
+            created     INT NOT NULL DEFAULT 0 \
+        )",
+        "CREATE INDEX idx_audit_log_user ON tbl_audit_log (user_id)",
+        "CREATE INDEX idx_audit_log_created ON tbl_audit_log (created)",
     ]
 
     eventDetails = [
@@ -315,7 +393,7 @@ class SpiderFootDb:
         # at least we can use this opportunity to ensure we have permissions to
         # read and write to such a file.
         try:
-            dbh = sqlite3.connect(database_path)
+            dbh = sqlite3.connect(database_path, check_same_thread=False)
         except Exception as e:
             raise IOError(f"Error connecting to internal database {database_path}") from e
 
@@ -373,6 +451,60 @@ class SpiderFootDb:
                     raise IOError("Looks like you are running a pre-4.0 database. Unfortunately "
                                   "SpiderFoot wasn't able to migrate you, so you'll need to delete "
                                   "your SpiderFoot database in order to proceed.") from None
+
+            # Add AI analysis table if it doesn't exist (for pre-Phase 8 databases)
+            try:
+                self.dbh.execute("SELECT COUNT(*) FROM tbl_scan_ai_analysis")
+            except sqlite3.Error:
+                try:
+                    for query in self.createSchemaQueries:
+                        if "ai_analysis" in query:
+                            self.dbh.execute(query)
+                    self.conn.commit()
+                except sqlite3.Error:
+                    pass  # Non-critical, will be created on next full init
+
+            # Add AI chat table if it doesn't exist (for pre-Phase 8b databases)
+            try:
+                self.dbh.execute("SELECT COUNT(*) FROM tbl_scan_ai_chat")
+            except sqlite3.Error:
+                try:
+                    for query in self.createSchemaQueries:
+                        if "ai_chat" in query:
+                            self.dbh.execute(query)
+                    self.conn.commit()
+                except sqlite3.Error:
+                    pass  # Non-critical, will be created on next full init
+
+            # Add correlation rules table if it doesn't exist (for pre-Phase 9 databases)
+            try:
+                self.dbh.execute("SELECT COUNT(*) FROM tbl_correlation_rules")
+            except sqlite3.Error:
+                try:
+                    for query in self.createSchemaQueries:
+                        if "correlation_rules" in query and "tbl_scan_correlation" not in query:
+                            self.dbh.execute(query)
+                    self.conn.commit()
+                except sqlite3.Error:
+                    pass  # Non-critical, will be created on next full init
+
+            # Add RBAC tables if they don't exist (Phase 10)
+            try:
+                self.dbh.execute("SELECT COUNT(*) FROM tbl_users")
+            except sqlite3.Error:
+                try:
+                    rbac_keywords = ("tbl_users", "tbl_roles", "tbl_permissions",
+                                     "tbl_user_roles", "tbl_role_permissions",
+                                     "tbl_audit_log", "idx_audit_log")
+                    for query in self.createSchemaQueries:
+                        if any(kw in query for kw in rbac_keywords):
+                            self.dbh.execute(query)
+                    self.conn.commit()
+                except sqlite3.Error as e:
+                    log.error(f"Failed to create RBAC tables: {e}")
+
+            # Seed RBAC data (idempotent)
+            self._seed_rbac_data()
 
             if init:
                 for row in self.eventDetails:
@@ -499,7 +631,7 @@ class SpiderFootDb:
             t.event = c.type AND c.source_event_hash = s.hash "
 
         if filterFp:
-            qry += " AND c.false_positive <> 1 "
+            qry += " AND COALESCE(c.false_positive, 0) <> 1 "
 
         if criteria.get('scan_id') is not None:
             qry += "AND c.scan_instance_id = ? "
@@ -939,7 +1071,7 @@ class SpiderFootDb:
                 qvars.append(eventType)
 
         if filterFp:
-            qry += " AND c.false_positive <> 1"
+            qry += " AND COALESCE(c.false_positive, 0) <> 1"
 
         if srcModule:
             if isinstance(srcModule, list):
@@ -1005,7 +1137,7 @@ class SpiderFootDb:
             qvars.append(eventType)
 
         if filterFp:
-            qry += " AND false_positive <> 1"
+            qry += " AND COALESCE(false_positive, 0) <> 1"
 
         qry += " GROUP BY type, data ORDER BY COUNT(*)"
 
@@ -1120,6 +1252,8 @@ class SpiderFootDb:
         qry2 = "DELETE FROM tbl_scan_config WHERE scan_instance_id = ?"
         qry3 = "DELETE FROM tbl_scan_results WHERE scan_instance_id = ?"
         qry4 = "DELETE FROM tbl_scan_log WHERE scan_instance_id = ?"
+        qry5 = "DELETE FROM tbl_scan_ai_analysis WHERE scan_instance_id = ?"
+        qry6 = "DELETE FROM tbl_scan_ai_chat WHERE scan_instance_id = ?"
         qvars = [instanceId]
 
         with self.dbhLock:
@@ -1128,6 +1262,8 @@ class SpiderFootDb:
                 self.dbh.execute(qry2, qvars)
                 self.dbh.execute(qry3, qvars)
                 self.dbh.execute(qry4, qvars)
+                self.dbh.execute(qry5, qvars)
+                self.dbh.execute(qry6, qvars)
                 self.conn.commit()
             except sqlite3.Error as e:
                 raise IOError("SQL error encountered when deleting scan") from e
@@ -1800,3 +1936,771 @@ class SpiderFootDb:
                     raise IOError("Unable to create correlation result in database") from e
 
         return uniqueId
+
+    # ------------------------------------------------------------------
+    # AI Analysis Methods
+    # ------------------------------------------------------------------
+
+    def aiAnalysisCreate(self, instanceId: str, provider: str, model: str, mode: str) -> str:
+        """Create an AI analysis record.
+
+        Args:
+            instanceId (str): scan instance ID
+            provider (str): AI provider ('openai' or 'anthropic')
+            model (str): model name used
+            mode (str): analysis mode ('quick' or 'deep')
+
+        Returns:
+            str: analysis ID
+
+        Raises:
+            TypeError: arg type was invalid
+            IOError: database I/O failed
+        """
+
+        if not isinstance(instanceId, str):
+            raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
+
+        if not isinstance(provider, str):
+            raise TypeError(f"provider is {type(provider)}; expected str()") from None
+
+        uniqueId = str(hashlib.md5(
+            str(time.time() + random.SystemRandom().randint(0, 99999999)).encode('utf-8')
+        ).hexdigest())  # noqa: DUO130
+
+        qry = "INSERT INTO tbl_scan_ai_analysis \
+            (id, scan_instance_id, provider, model, mode, created, status) \
+            VALUES (?, ?, ?, ?, ?, ?, ?)"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, (
+                    uniqueId, instanceId, provider, model, mode,
+                    int(time.time() * 1000), 'running'
+                ))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError("Unable to create AI analysis record in database") from e
+
+        return uniqueId
+
+    def aiAnalysisUpdate(self, analysisId: str, status: str,
+                         resultJson: str = None, tokenUsage: int = None,
+                         error: str = None) -> None:
+        """Update an AI analysis record.
+
+        Args:
+            analysisId (str): analysis ID
+            status (str): new status ('running', 'completed', 'failed')
+            resultJson (str): JSON result string (optional)
+            tokenUsage (int): tokens consumed (optional)
+            error (str): error message (optional)
+
+        Raises:
+            TypeError: arg type was invalid
+            IOError: database I/O failed
+        """
+
+        if not isinstance(analysisId, str):
+            raise TypeError(f"analysisId is {type(analysisId)}; expected str()") from None
+
+        sets = ["status = ?"]
+        vals = [status]
+
+        if resultJson is not None:
+            sets.append("result_json = ?")
+            vals.append(resultJson)
+        if tokenUsage is not None:
+            sets.append("token_usage = ?")
+            vals.append(tokenUsage)
+        if error is not None:
+            sets.append("error = ?")
+            vals.append(error)
+
+        vals.append(analysisId)
+        qry = f"UPDATE tbl_scan_ai_analysis SET {', '.join(sets)} WHERE id = ?"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, vals)
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError("Unable to update AI analysis record in database") from e
+
+    def aiAnalysisGet(self, instanceId: str) -> list:
+        """Get all AI analyses for a scan, ordered by most recent first.
+
+        Args:
+            instanceId (str): scan instance ID
+
+        Returns:
+            list: list of analysis rows
+
+        Raises:
+            TypeError: arg type was invalid
+            IOError: database I/O failed
+        """
+
+        if not isinstance(instanceId, str):
+            raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
+
+        qry = "SELECT id, scan_instance_id, provider, model, mode, created, \
+            status, result_json, token_usage, error \
+            FROM tbl_scan_ai_analysis WHERE scan_instance_id = ? \
+            ORDER BY created DESC"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, [instanceId])
+                return self.dbh.fetchall()
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when fetching AI analyses") from e
+
+    def aiAnalysisGetById(self, analysisId: str) -> list:
+        """Get a single AI analysis by ID.
+
+        Args:
+            analysisId (str): analysis ID
+
+        Returns:
+            list: analysis row or None
+
+        Raises:
+            TypeError: arg type was invalid
+            IOError: database I/O failed
+        """
+
+        if not isinstance(analysisId, str):
+            raise TypeError(f"analysisId is {type(analysisId)}; expected str()") from None
+
+        qry = "SELECT id, scan_instance_id, provider, model, mode, created, \
+            status, result_json, token_usage, error \
+            FROM tbl_scan_ai_analysis WHERE id = ?"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, [analysisId])
+                return self.dbh.fetchone()
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when fetching AI analysis") from e
+
+    def aiAnalysisDelete(self, analysisId: str) -> bool:
+        """Delete an AI analysis record.
+
+        Args:
+            analysisId (str): analysis ID
+
+        Returns:
+            bool: success
+
+        Raises:
+            TypeError: arg type was invalid
+            IOError: database I/O failed
+        """
+
+        if not isinstance(analysisId, str):
+            raise TypeError(f"analysisId is {type(analysisId)}; expected str()") from None
+
+        qry = "DELETE FROM tbl_scan_ai_analysis WHERE id = ?"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, [analysisId])
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when deleting AI analysis") from e
+
+        return True
+
+    # ── AI Chat (Natural Language Query) ──────────────────────────────────
+
+    def aiChatCreate(self, instanceId: str, role: str, content: str,
+                     tokenUsage: int = 0) -> str:
+        """Insert a chat message for a scan.
+
+        Args:
+            instanceId (str): scan instance ID
+            role (str): 'user', 'assistant', 'tool_call', or 'tool_result'
+            content (str): message text or JSON string
+            tokenUsage (int): tokens consumed (assistant turns)
+
+        Returns:
+            str: message ID
+
+        Raises:
+            TypeError: arg type was invalid
+            IOError: database I/O failed
+        """
+
+        if not isinstance(instanceId, str):
+            raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
+        if not isinstance(role, str):
+            raise TypeError(f"role is {type(role)}; expected str()") from None
+        if not isinstance(content, str):
+            raise TypeError(f"content is {type(content)}; expected str()") from None
+
+        uniqueId = hashlib.md5(
+            str(time.time() + random.SystemRandom().randint(0, 99999999)).encode('utf-8')
+        ).hexdigest()
+
+        qry = "INSERT INTO tbl_scan_ai_chat \
+            (id, scan_instance_id, role, content, token_usage, created) \
+            VALUES (?, ?, ?, ?, ?, ?)"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, (
+                    uniqueId, instanceId, role, content,
+                    tokenUsage, int(time.time() * 1000)
+                ))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when creating AI chat message") from e
+
+        return uniqueId
+
+    def aiChatGet(self, instanceId: str) -> list:
+        """Get all chat messages for a scan, ordered chronologically.
+
+        Args:
+            instanceId (str): scan instance ID
+
+        Returns:
+            list: rows of [id, scan_instance_id, role, content, token_usage, created]
+
+        Raises:
+            TypeError: arg type was invalid
+            IOError: database I/O failed
+        """
+
+        if not isinstance(instanceId, str):
+            raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
+
+        qry = "SELECT id, scan_instance_id, role, content, token_usage, created \
+            FROM tbl_scan_ai_chat WHERE scan_instance_id = ? \
+            ORDER BY created ASC"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, [instanceId])
+                return self.dbh.fetchall()
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when fetching AI chat messages") from e
+
+    def aiChatDeleteAll(self, instanceId: str) -> bool:
+        """Delete all chat messages for a scan.
+
+        Args:
+            instanceId (str): scan instance ID
+
+        Returns:
+            bool: success
+
+        Raises:
+            TypeError: arg type was invalid
+            IOError: database I/O failed
+        """
+
+        if not isinstance(instanceId, str):
+            raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
+
+        qry = "DELETE FROM tbl_scan_ai_chat WHERE scan_instance_id = ?"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, [instanceId])
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when deleting AI chat messages") from e
+
+        return True
+
+    # ── Correlation Rules CRUD ─────────────────────────────────────────────
+
+    def correlationRuleCreate(self, ruleId: str, yamlContent: str) -> str:
+        """Create a user-defined correlation rule.
+
+        Args:
+            ruleId (str): unique rule identifier (must match YAML id field)
+            yamlContent (str): full YAML content of the rule
+
+        Returns:
+            str: primary key ID
+
+        Raises:
+            TypeError: argument type was invalid
+            IOError: database I/O failed
+        """
+        if not isinstance(ruleId, str):
+            raise TypeError(f"ruleId is {type(ruleId)}; expected str()") from None
+        if not isinstance(yamlContent, str):
+            raise TypeError(f"yamlContent is {type(yamlContent)}; expected str()") from None
+
+        now = int(time.time() * 1000)
+        id_str = hashlib.md5(f"{ruleId}{now}".encode('utf-8', errors='replace')).hexdigest()
+
+        qry = "INSERT INTO tbl_correlation_rules \
+            (id, rule_id, yaml_content, enabled, created, updated) \
+            VALUES (?, ?, ?, 1, ?, ?)"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, (id_str, ruleId, yamlContent, now, now))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when creating correlation rule") from e
+
+        return id_str
+
+    def correlationRuleUpdate(self, ruleId: str, yamlContent: str) -> None:
+        """Update a user-defined correlation rule.
+
+        Args:
+            ruleId (str): rule identifier
+            yamlContent (str): updated YAML content
+
+        Raises:
+            TypeError: argument type was invalid
+            IOError: database I/O failed
+        """
+        if not isinstance(ruleId, str):
+            raise TypeError(f"ruleId is {type(ruleId)}; expected str()") from None
+        if not isinstance(yamlContent, str):
+            raise TypeError(f"yamlContent is {type(yamlContent)}; expected str()") from None
+
+        now = int(time.time() * 1000)
+        qry = "UPDATE tbl_correlation_rules SET yaml_content = ?, updated = ? WHERE rule_id = ?"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, (yamlContent, now, ruleId))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when updating correlation rule") from e
+
+    def correlationRuleDelete(self, ruleId: str) -> None:
+        """Delete a user-defined correlation rule.
+
+        Args:
+            ruleId (str): rule identifier
+
+        Raises:
+            TypeError: argument type was invalid
+            IOError: database I/O failed
+        """
+        if not isinstance(ruleId, str):
+            raise TypeError(f"ruleId is {type(ruleId)}; expected str()") from None
+
+        qry = "DELETE FROM tbl_correlation_rules WHERE rule_id = ?"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, [ruleId])
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when deleting correlation rule") from e
+
+    def correlationRuleGet(self, ruleId: str) -> list:
+        """Get a user-defined correlation rule.
+
+        Args:
+            ruleId (str): rule identifier
+
+        Returns:
+            list: [id, rule_id, yaml_content, enabled, created, updated] or empty list
+
+        Raises:
+            TypeError: argument type was invalid
+            IOError: database I/O failed
+        """
+        if not isinstance(ruleId, str):
+            raise TypeError(f"ruleId is {type(ruleId)}; expected str()") from None
+
+        qry = "SELECT id, rule_id, yaml_content, enabled, created, updated \
+            FROM tbl_correlation_rules WHERE rule_id = ?"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, [ruleId])
+                return self.dbh.fetchone() or []
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when fetching correlation rule") from e
+
+    def correlationRuleGetAll(self) -> list:
+        """Get all user-defined correlation rules.
+
+        Returns:
+            list: list of [id, rule_id, yaml_content, enabled, created, updated]
+
+        Raises:
+            IOError: database I/O failed
+        """
+
+        qry = "SELECT id, rule_id, yaml_content, enabled, created, updated \
+            FROM tbl_correlation_rules ORDER BY created DESC"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry)
+                return self.dbh.fetchall()
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when fetching correlation rules") from e
+
+    def correlationRuleToggle(self, ruleId: str, enabled: bool) -> None:
+        """Enable or disable a user-defined correlation rule.
+
+        Args:
+            ruleId (str): rule identifier
+            enabled (bool): whether the rule should be enabled
+
+        Raises:
+            TypeError: argument type was invalid
+            IOError: database I/O failed
+        """
+        if not isinstance(ruleId, str):
+            raise TypeError(f"ruleId is {type(ruleId)}; expected str()") from None
+
+        now = int(time.time() * 1000)
+        qry = "UPDATE tbl_correlation_rules SET enabled = ?, updated = ? WHERE rule_id = ?"
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(qry, (1 if enabled else 0, now, ruleId))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError("SQL error encountered when toggling correlation rule") from e
+
+    # ──────────────────────────────────────────────────────────────────────
+    #  RBAC: seed data, users, roles, permissions, audit log
+    # ──────────────────────────────────────────────────────────────────────
+
+    # Role / permission definitions used for seeding
+    _RBAC_ROLES = [
+        ("administrator", "Administrator", "Full access to all features"),
+        ("analyst", "Analyst", "Can run scans, view results, manage rules and AI features"),
+        ("viewer", "Viewer", "Read-only access to scans and results"),
+    ]
+
+    _RBAC_PERMISSIONS = [
+        ("scans", "read"),
+        ("scans", "create"),
+        ("scans", "update"),
+        ("scans", "delete"),
+        ("results", "read"),
+        ("settings", "read"),
+        ("settings", "update"),
+        ("modules", "read"),
+        ("correlation_rules", "read"),
+        ("correlation_rules", "create"),
+        ("correlation_rules", "update"),
+        ("correlation_rules", "delete"),
+        ("ai_features", "read"),
+        ("ai_features", "create"),
+        ("users", "read"),
+        ("users", "create"),
+        ("users", "update"),
+        ("users", "delete"),
+    ]
+
+    _ROLE_PERMISSIONS = {
+        "administrator": [
+            "scans:read", "scans:create", "scans:update", "scans:delete",
+            "results:read", "settings:read", "settings:update", "modules:read",
+            "correlation_rules:read", "correlation_rules:create",
+            "correlation_rules:update", "correlation_rules:delete",
+            "ai_features:read", "ai_features:create",
+            "users:read", "users:create", "users:update", "users:delete",
+        ],
+        "analyst": [
+            "scans:read", "scans:create", "scans:update", "scans:delete",
+            "results:read", "settings:read", "modules:read",
+            "correlation_rules:read", "correlation_rules:create",
+            "correlation_rules:update", "correlation_rules:delete",
+            "ai_features:read", "ai_features:create",
+        ],
+        "viewer": [
+            "scans:read", "results:read", "modules:read",
+            "correlation_rules:read", "ai_features:read",
+        ],
+    }
+
+    def _seed_rbac_data(self) -> None:
+        """Seed roles, permissions, and role-permission mappings.
+
+        Uses INSERT OR IGNORE so it's safe to call on every startup.
+        """
+        with self.dbhLock:
+            try:
+                # Seed roles
+                for role_name, display, desc in self._RBAC_ROLES:
+                    role_id = hashlib.md5(role_name.encode('utf-8', errors='replace')).hexdigest()
+                    self.dbh.execute(
+                        "INSERT OR IGNORE INTO tbl_roles (id, name, description) VALUES (?, ?, ?)",
+                        (role_id, role_name, desc)
+                    )
+
+                # Seed permissions
+                perm_id_map = {}
+                for resource, action in self._RBAC_PERMISSIONS:
+                    perm_key = f"{resource}:{action}"
+                    perm_id = hashlib.md5(perm_key.encode('utf-8', errors='replace')).hexdigest()
+                    perm_id_map[perm_key] = perm_id
+                    self.dbh.execute(
+                        "INSERT OR IGNORE INTO tbl_permissions (id, resource, action) VALUES (?, ?, ?)",
+                        (perm_id, resource, action)
+                    )
+
+                # Seed role-permission mappings
+                for role_name, perms in self._ROLE_PERMISSIONS.items():
+                    role_id = hashlib.md5(role_name.encode('utf-8', errors='replace')).hexdigest()
+                    for perm_key in perms:
+                        perm_id = perm_id_map.get(perm_key)
+                        if perm_id:
+                            self.dbh.execute(
+                                "INSERT OR IGNORE INTO tbl_role_permissions (role_id, permission_id) VALUES (?, ?)",
+                                (role_id, perm_id)
+                            )
+
+                self.conn.commit()
+            except sqlite3.Error as e:
+                log.error(f"Failed to seed RBAC data: {e}")
+
+    # ── User CRUD ────────────────────────────────────────────────────────
+
+    def userCreate(self, username: str, password_hash: str,
+                   display_name: str = "", email: str = "") -> str:
+        """Create a new user.
+
+        Args:
+            username: unique username
+            password_hash: bcrypt-hashed password
+            display_name: optional display name
+            email: optional email
+
+        Returns:
+            str: the new user ID
+
+        Raises:
+            IOError: database I/O failed
+        """
+        user_id = hashlib.md5(f"{username}{time.time()}{random.SystemRandom().randint(0, 99999999)}".encode(
+            'utf-8', errors='replace')).hexdigest()
+        now = int(time.time() * 1000)
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "INSERT INTO tbl_users (id, username, password, display_name, email, is_active, created, updated) "
+                    "VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
+                    (user_id, username, password_hash, display_name, email, now, now)
+                )
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error creating user: {e}") from e
+        return user_id
+
+    def userGet(self, user_id: str):
+        """Get a user by ID.
+
+        Returns:
+            tuple: (id, username, password, display_name, email, is_active, created, updated) or None
+        """
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "SELECT id, username, password, display_name, email, is_active, created, updated "
+                    "FROM tbl_users WHERE id = ?", [user_id])
+                return self.dbh.fetchone()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error fetching user: {e}") from e
+
+    def userGetByUsername(self, username: str):
+        """Get a user by username.
+
+        Returns:
+            tuple: (id, username, password, display_name, email, is_active, created, updated) or None
+        """
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "SELECT id, username, password, display_name, email, is_active, created, updated "
+                    "FROM tbl_users WHERE username = ?", [username])
+                return self.dbh.fetchone()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error fetching user by username: {e}") from e
+
+    def userList(self) -> list:
+        """Get all users.
+
+        Returns:
+            list: list of (id, username, password, display_name, email, is_active, created, updated)
+        """
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "SELECT id, username, password, display_name, email, is_active, created, updated "
+                    "FROM tbl_users ORDER BY created")
+                return self.dbh.fetchall()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error listing users: {e}") from e
+
+    def userUpdate(self, user_id: str, **fields) -> None:
+        """Update user fields.
+
+        Supported fields: display_name, email, is_active
+        """
+        allowed = {"display_name", "email", "is_active"}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return
+
+        updates["updated"] = int(time.time() * 1000)
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [user_id]
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(f"UPDATE tbl_users SET {set_clause} WHERE id = ?", values)
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error updating user: {e}") from e
+
+    def userSetPassword(self, user_id: str, password_hash: str) -> None:
+        """Update a user's password."""
+        now = int(time.time() * 1000)
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "UPDATE tbl_users SET password = ?, updated = ? WHERE id = ?",
+                    (password_hash, now, user_id))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error updating password: {e}") from e
+
+    def userSetActive(self, user_id: str, is_active: bool) -> None:
+        """Enable or disable a user."""
+        now = int(time.time() * 1000)
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "UPDATE tbl_users SET is_active = ?, updated = ? WHERE id = ?",
+                    (1 if is_active else 0, now, user_id))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error setting user active state: {e}") from e
+
+    # ── Role methods ─────────────────────────────────────────────────────
+
+    def userRolesGet(self, user_id: str) -> list:
+        """Get role names for a user.
+
+        Returns:
+            list: role name strings, e.g. ['administrator']
+        """
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "SELECT r.name FROM tbl_roles r "
+                    "JOIN tbl_user_roles ur ON ur.role_id = r.id "
+                    "WHERE ur.user_id = ?", [user_id])
+                return [row[0] for row in self.dbh.fetchall()]
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error fetching user roles: {e}") from e
+
+    def userRolesSet(self, user_id: str, role_ids: list) -> None:
+        """Replace all roles for a user.
+
+        Args:
+            user_id: user identifier
+            role_ids: list of role IDs to assign
+        """
+        with self.dbhLock:
+            try:
+                self.dbh.execute("DELETE FROM tbl_user_roles WHERE user_id = ?", [user_id])
+                for role_id in role_ids:
+                    self.dbh.execute(
+                        "INSERT INTO tbl_user_roles (user_id, role_id) VALUES (?, ?)",
+                        (user_id, role_id))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error setting user roles: {e}") from e
+
+    def userPermissionsGet(self, user_id: str) -> list:
+        """Get all permissions for a user (resolved through roles).
+
+        Returns:
+            list: list of (resource, action) tuples
+        """
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "SELECT DISTINCT p.resource, p.action FROM tbl_permissions p "
+                    "JOIN tbl_role_permissions rp ON rp.permission_id = p.id "
+                    "JOIN tbl_user_roles ur ON ur.role_id = rp.role_id "
+                    "WHERE ur.user_id = ?", [user_id])
+                return self.dbh.fetchall()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error fetching user permissions: {e}") from e
+
+    def roleGetByName(self, name: str):
+        """Get a role ID by name.
+
+        Returns:
+            str: role ID, or None if not found
+        """
+        with self.dbhLock:
+            try:
+                self.dbh.execute("SELECT id FROM tbl_roles WHERE name = ?", [name])
+                row = self.dbh.fetchone()
+                return row[0] if row else None
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error fetching role: {e}") from e
+
+    def roleList(self) -> list:
+        """Get all roles.
+
+        Returns:
+            list: list of (id, name, description)
+        """
+        with self.dbhLock:
+            try:
+                self.dbh.execute("SELECT id, name, description FROM tbl_roles ORDER BY name")
+                return self.dbh.fetchall()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error listing roles: {e}") from e
+
+    # ── Audit log ────────────────────────────────────────────────────────
+
+    def auditLogCreate(self, user_id: str, username: str, action: str,
+                       resource: str, resource_id: str = "",
+                       details: str = "", ip_address: str = "") -> None:
+        """Create an audit log entry."""
+        log_id = hashlib.md5(f"{user_id}{action}{time.time()}{random.SystemRandom().randint(0, 99999999)}".encode(
+            'utf-8', errors='replace')).hexdigest()
+        now = int(time.time() * 1000)
+
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "INSERT INTO tbl_audit_log (id, user_id, username, action, resource, resource_id, details, ip_address, created) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (log_id, user_id, username, action, resource, resource_id, details, ip_address, now))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                log.error(f"Failed to create audit log entry: {e}")
+
+    def auditLogList(self, limit: int = 100, offset: int = 0) -> list:
+        """Get audit log entries (newest first).
+
+        Returns:
+            list: list of (id, user_id, username, action, resource, resource_id, details, ip_address, created)
+        """
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "SELECT id, user_id, username, action, resource, resource_id, details, ip_address, created "
+                    "FROM tbl_audit_log ORDER BY created DESC LIMIT ? OFFSET ?",
+                    (limit, offset))
+                return self.dbh.fetchall()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error listing audit log: {e}") from e

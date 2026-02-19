@@ -6,7 +6,16 @@
 # Written by: TheTechromancer
 #
 
-FROM python:3
+# Stage 1: Build frontend
+FROM node:20 AS frontend-build
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: Main image with tools
+FROM python:3.12
 
 # Install tools/dependencies from apt
 RUN apt-get -y update && apt-get -y install nbtscan onesixtyone nmap
@@ -35,24 +44,9 @@ RUN groupadd spiderfoot \
 # Install RetireJS
 RUN apt remove -y cmdtest \
     && apt remove -y yarn \
-    && curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - \
-    && echo 'deb https://dl.yarnpkg.com/debian/ stable main' |tee /etc/apt/sources.list.d/yarn.list \
-    && apt-get update \
-    && apt-get install yarn -y \
-    && yarn install \
-    && curl -fsSL https://deb.nodesource.com/setup_17.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g retire
-
-# Install Google Chrome the New Way (Not via apt-key)
-RUN wget -qO - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list \
-    && apt -y update && apt install --allow-unauthenticated -y google-chrome-stable
-
-# Install Wappalyzer
-RUN git clone https://github.com/AliasIO/wappalyzer.git \
-    && cd wappalyzer \
-    && yarn install && yarn run link
 
 # Install Nuclei
 RUN wget https://github.com/projectdiscovery/nuclei/releases/download/v2.6.5/nuclei_2.6.5_linux_amd64.zip \
@@ -80,6 +74,7 @@ RUN mkdir -p $SPIDERFOOT_DATA || true \
 
 WORKDIR /home/spiderfoot
 COPY . .
+COPY --from=frontend-build /app/frontend/dist ./frontend/dist
 
 ENV VIRTUAL_ENV=/opt/venv
 RUN mkdir -p "$VIRTUAL_ENV" || true
@@ -128,7 +123,6 @@ db.configSet({ \
     "sfp_tool_trufflehog:trufflehog_path": "/usr/local/bin/trufflehog", \
     "sfp_tool_nuclei:nuclei_path": "/tools/nuclei", \
     "sfp_tool_nuclei:template_path": "/tools/nuclei-templates", \
-    "sfp_tool_wappalyzer:wappalyzer_path": "/tools/wappalyzer/src/drivers/npm/cli.js", \
     "sfp_tool_nbtscan:nbtscan_path": "/usr/bin/nbtscan", \
     "sfp_tool_nmap:nmappath": "DISABLED_BECAUSE_NMAP_REQUIRES_ROOT_TO_WORK" \
 })' || true && ./sf.py -l 0.0.0.0:5001

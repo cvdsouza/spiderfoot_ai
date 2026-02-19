@@ -10,9 +10,11 @@ flake8-quotes==3.3.2
 flake8-return==1.2.0
 flake8-sfs==0.0.4
 flake8-simplify==0.19.3
-pytest==7.2.1
-pytest-cov==4.0.0
-pytest-mock==3.10.0
-pytest-xdist==3.2.0
+pytest==7.4.0
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+pytest-xdist==3.5.0
+pytest-asyncio>=0.23.0
 pycodestyle==2.9.0
-responses==0.22.0
+responses==0.25.0
+httpx>=0.26.0

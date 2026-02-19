@@ -27,6 +27,12 @@ services:
     ports:
       - "5001:5001"
     restart: unless-stopped
+    environment:
+      # Admin credentials — set these before first run.
+      # The admin user is created automatically on startup if it doesn't already exist.
+      # Change these values or use a .env file (see below).
+      SPIDERFOOT_ADMIN_USER: "${SPIDERFOOT_ADMIN_USER:-admin}"
+      SPIDERFOOT_ADMIN_PASSWORD: "${SPIDERFOOT_ADMIN_PASSWORD:-changeme}"
 
 volumes:
   spiderfoot-data:

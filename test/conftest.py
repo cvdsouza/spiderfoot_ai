@@ -43,3 +43,39 @@ def default_options(request):
         "cli.password": "",
         "cli.server_baseurl": "http://127.0.0.1:5001"
     }
+
+
+@pytest.fixture
+def fastapi_test_config():
+    """Configuration for FastAPI test client."""
+    return {
+        '_debug': False,
+        '__logging': False,
+        '__outputfilter': None,
+        '_useragent': 'SpiderFoot-Test/1.0',
+        '_dnsserver': '',
+        '_fetchtimeout': 5,
+        '_internettlds': 'https://publicsuffix.org/list/effective_tld_names.dat',
+        '_internettlds_cache': 72,
+        '_genericusers': '',
+        '__database': f"{SpiderFootHelpers.dataPath()}/spiderfoot.test.db",
+        '__modules__': None,
+        '__correlationrules__': None,
+        '_socks1type': '',
+        '_socks2addr': '',
+        '_socks3port': '',
+        '_socks4user': '',
+        '_socks5pwd': '',
+        '__logstdout': False,
+    }
+
+
+@pytest.fixture
+def fastapi_client(fastapi_test_config):
+    """Create a FastAPI test client."""
+    from fastapi.testclient import TestClient
+    from api.app import create_app
+
+    app = create_app(config=fastapi_test_config)
+    with TestClient(app) as client:
+        yield client
