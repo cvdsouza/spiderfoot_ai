@@ -10,6 +10,7 @@ import NewScan from './components/scans/NewScan';
 import CorrelationRulesPage from './components/correlations/CorrelationRulesPage';
 import SettingsPage from './components/settings/SettingsPage';
 import UserManagementPage from './components/users/UserManagementPage';
+import WorkersStatus from './components/workers/WorkersStatus';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -38,6 +39,7 @@ export default function App() {
               <Route path="/correlation-rules" element={<CorrelationRulesPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/users" element={<UserManagementPage />} />
+              <Route path="/workers" element={<WorkersStatus />} />
             </Route>
           </Route>
         </Routes>

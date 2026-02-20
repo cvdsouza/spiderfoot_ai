@@ -184,6 +184,18 @@ class SpiderFootDb:
         )",
         "CREATE INDEX idx_audit_log_user ON tbl_audit_log (user_id)",
         "CREATE INDEX idx_audit_log_created ON tbl_audit_log (created)",
+        # ── Worker registry (Phase 11) ───────────────────────────────────
+        "CREATE TABLE tbl_workers ( \
+            id           VARCHAR NOT NULL PRIMARY KEY, \
+            name         VARCHAR NOT NULL, \
+            host         VARCHAR NOT NULL, \
+            queue_type   VARCHAR NOT NULL DEFAULT 'fast', \
+            status       VARCHAR NOT NULL DEFAULT 'idle', \
+            current_scan VARCHAR NOT NULL DEFAULT '', \
+            last_seen    INT NOT NULL DEFAULT 0, \
+            registered   INT NOT NULL DEFAULT 0 \
+        )",
+        "CREATE INDEX idx_workers_status ON tbl_workers (status)",
     ]
 
     eventDetails = [
@@ -505,6 +517,18 @@ class SpiderFootDb:
 
             # Seed RBAC data (idempotent)
             self._seed_rbac_data()
+
+            # Add worker registry table if it doesn't exist (Phase 11)
+            try:
+                self.dbh.execute("SELECT COUNT(*) FROM tbl_workers")
+            except sqlite3.Error:
+                try:
+                    for query in self.createSchemaQueries:
+                        if "tbl_workers" in query or "idx_workers" in query:
+                            self.dbh.execute(query)
+                    self.conn.commit()
+                except sqlite3.Error as e:
+                    log.error(f"Failed to create tbl_workers: {e}")
 
             if init:
                 for row in self.eventDetails:
@@ -2704,3 +2728,95 @@ class SpiderFootDb:
                 return self.dbh.fetchall()
             except sqlite3.Error as e:
                 raise IOError(f"SQL error listing audit log: {e}") from e
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Worker registry methods (Phase 11)
+    # ──────────────────────────────────────────────────────────────────────
+
+    def workerRegister(self, worker_id: str, name: str, host: str, queue_type: str = 'fast') -> None:
+        """Register or update a distributed scan worker.
+
+        Args:
+            worker_id: Unique worker identifier (UUID)
+            name: Human-readable worker name
+            host: Hostname/IP of the worker
+            queue_type: 'fast' or 'slow'
+        """
+        now = int(time.time())
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "INSERT INTO tbl_workers (id, name, host, queue_type, status, current_scan, last_seen, registered) "
+                    "VALUES (?, ?, ?, ?, 'idle', '', ?, ?) "
+                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, host=excluded.host, "
+                    "queue_type=excluded.queue_type, status='idle', last_seen=excluded.last_seen",
+                    (worker_id, name, host, queue_type, now, now))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error registering worker: {e}") from e
+
+    def workerHeartbeat(self, worker_id: str, status: str, current_scan: str = '') -> None:
+        """Update worker heartbeat, status, and current scan.
+
+        Args:
+            worker_id: Unique worker identifier
+            status: 'idle', 'busy', or 'offline'
+            current_scan: scan_id currently being processed (empty if idle)
+        """
+        now = int(time.time())
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "UPDATE tbl_workers SET status=?, current_scan=?, last_seen=? WHERE id=?",
+                    (status, current_scan, now, worker_id))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error updating worker heartbeat: {e}") from e
+
+    def workerList(self) -> list:
+        """Return all registered workers.
+
+        Returns:
+            list: list of (id, name, host, queue_type, status, current_scan, last_seen, registered)
+        """
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "SELECT id, name, host, queue_type, status, current_scan, last_seen, registered "
+                    "FROM tbl_workers ORDER BY registered DESC")
+                return self.dbh.fetchall()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error listing workers: {e}") from e
+
+    def workerGet(self, worker_id: str):
+        """Get a single worker by ID.
+
+        Returns:
+            tuple | None: (id, name, host, queue_type, status, current_scan, last_seen, registered) or None
+        """
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "SELECT id, name, host, queue_type, status, current_scan, last_seen, registered "
+                    "FROM tbl_workers WHERE id=?",
+                    (worker_id,))
+                return self.dbh.fetchone()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error getting worker: {e}") from e
+
+    def workerOfflineStale(self, max_age_seconds: int = 60) -> None:
+        """Mark workers as offline if they have not sent a heartbeat recently.
+
+        Args:
+            max_age_seconds: Workers with last_seen older than this are marked offline
+        """
+        cutoff = int(time.time()) - max_age_seconds
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "UPDATE tbl_workers SET status='offline' "
+                    "WHERE status != 'offline' AND last_seen < ?",
+                    (cutoff,))
+                self.conn.commit()
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error marking stale workers offline: {e}") from e

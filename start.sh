@@ -63,6 +63,9 @@ if [ "$BUILD" = true ]; then
     BUILD_FLAG="--build"
 fi
 
+# ── Generate TLS certificates for RabbitMQ (idempotent — skips if already done)
+bash "$SCRIPT_DIR/generate-certs.sh"
+
 echo "Starting SpiderFoot..."
 docker compose $COMPOSE_FILES up $BUILD_FLAG $DETACH
 

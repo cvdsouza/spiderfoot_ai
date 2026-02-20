@@ -29,6 +29,7 @@ export default function Header() {
     { to: '/correlation-rules', label: 'Rules', show: true },
     { to: '/settings', label: 'Settings', show: hasPermission('settings', 'read') },
     { to: '/users', label: 'Users', show: hasRole('administrator') },
+    { to: '/workers', label: 'Workers', show: hasRole('administrator') },
   ];
 
   async function handleLogout() {

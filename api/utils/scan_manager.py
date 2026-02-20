@@ -4,11 +4,14 @@ import asyncio
 import html
 import logging
 import multiprocessing as mp
+import os
 from copy import deepcopy
 
 from sflib import SpiderFoot
 from sfscan import startSpiderFootScanner
 from spiderfoot import SpiderFootDb, SpiderFootHelpers
+from api.services.module_categories import classify_modules
+from api.services.task_publisher import publish_scan_task, rabbitmq_available, RABBITMQ_URL
 
 # Use an explicit spawn context rather than changing the global default.
 # This avoids conflicts with objects (e.g. Queue) created in the default
@@ -106,8 +109,18 @@ async def launch_scan(
         return ("ERROR", "Incorrect usage: no modules specified for scan.")
 
     # Add mandatory storage module
-    if "sfp__stor_db" not in modlist:
-        modlist.append("sfp__stor_db")
+    # Use RabbitMQ storage for distributed workers, direct DB for local scans
+    if RABBITMQ_URL and rabbitmq_available():
+        # Remote worker mode: use RabbitMQ results queue (stateless workers)
+        if "sfp__stor_rabbitmq" not in modlist:
+            modlist.append("sfp__stor_rabbitmq")
+        # Remove sfp__stor_db if present (workers don't access DB directly)
+        if "sfp__stor_db" in modlist:
+            modlist.remove("sfp__stor_db")
+    else:
+        # Local mode: use direct DB storage (backward compatible)
+        if "sfp__stor_db" not in modlist:
+            modlist.append("sfp__stor_db")
     modlist.sort()
 
     # Remove stdout module
@@ -121,6 +134,27 @@ async def launch_scan(
         scan_target = scan_target.lower()
 
     scan_id = SpiderFootHelpers.genScanInstanceId()
+    modlist_str = ','.join(modlist)
+
+    # ── Try to dispatch to a distributed worker via RabbitMQ ──────────
+    if RABBITMQ_URL and rabbitmq_available():
+        queue_type = classify_modules(modlist_str)
+        task = {
+            "scan_id": scan_id,
+            "scan_name": scan_name,
+            "scan_target": scan_target,
+            "target_type": target_type,
+            "module_list": modlist_str,
+            "queue_type": queue_type,
+            "api_url": os.environ.get('SPIDERFOOT_API_URL', 'http://localhost:5001'),
+            "result_mode": "rabbitmq",  # Workers publish results to RabbitMQ (stateless)
+        }
+        if publish_scan_task(task, queue_type):
+            log.info(f"Scan [{scan_id}] dispatched to '{queue_type}' worker queue")
+            return ("SUCCESS", scan_id)
+        log.warning(f"Scan [{scan_id}] RabbitMQ publish failed — falling back to local subprocess")
+
+    # ── Fallback: run scan in a local subprocess (existing behaviour) ──
     try:
         p = _spawn_ctx.Process(
             target=startSpiderFootScanner,

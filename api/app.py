@@ -13,7 +13,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.middleware.security_headers import SecurityHeadersMiddleware
-from api.routers import ai_analysis, auth, correlation_rules, exports, legacy, modules, results, scans, settings, system, users
+from api.routers import ai_analysis, auth, correlation_rules, exports, legacy, modules, results, scans, settings, system, users, workers
+from api.services.result_consumer import ResultConsumerManager
+from api.services.task_publisher import rabbitmq_available
 from sflib import SpiderFoot
 from spiderfoot import SpiderFootCorrelator, SpiderFootDb, SpiderFootHelpers, __version__
 from spiderfoot.logger import logListenerSetup, logWorkerSetup
@@ -173,11 +175,26 @@ async def lifespan(app: FastAPI):
     app.state.correlation_rules = sf_correlation_rules
     app.state.correlations_dir = correlations_dir
 
+    # Start result consumer for stateless workers (if RabbitMQ available)
+    rabbitmq_url = os.environ.get('RABBITMQ_URL', '')
+    if rabbitmq_url and rabbitmq_available():
+        try:
+            consumer_manager = ResultConsumerManager(dbh, rabbitmq_url)
+            consumer_manager.start()
+            app.state.result_consumer = consumer_manager
+            log.info("Result consumer started for stateless workers")
+        except Exception as e:
+            log.error(f"Failed to start result consumer: {e}")
+    else:
+        log.debug("RabbitMQ not available — result consumer not started (workers will use direct DB access)")
+
     log.info(f"SpiderFoot {__version__} API ready. {len(sf_modules)} modules loaded, {len(sf_correlation_rules)} correlation rules.")
 
     yield
 
     # Cleanup on shutdown
+    if hasattr(app.state, 'result_consumer'):
+        app.state.result_consumer.shutdown()
     log.info("SpiderFoot API shutting down.")
 
 
@@ -236,6 +253,7 @@ def create_app(
     app.include_router(ai_analysis.router, prefix="/api/v1")
     app.include_router(correlation_rules.router, prefix="/api/v1")
     app.include_router(users.router, prefix="/api/v1")
+    app.include_router(workers.router, prefix="/api/v1")
 
     # Legacy compatibility routes (flat URLs for sfcli.py)
     app.include_router(legacy.router)
