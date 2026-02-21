@@ -108,3 +108,29 @@ def worker_heartbeat(
     except Exception as exc:
         log.error("Worker heartbeat error: %s", exc)
         raise HTTPException(status_code=500, detail="Heartbeat failed") from exc
+
+
+@router.post("/workers/cleanup")
+def cleanup_offline_workers(
+    user: dict = Depends(require_permission("settings", "write")),
+    dbh: SpiderFootDb = Depends(get_db),
+) -> dict:
+    """Manually cleanup offline workers.
+
+    Deletes workers that have been offline for more than 5 minutes.
+    Workers are stateless and will automatically re-register on heartbeat.
+
+    Requires settings:write permission.
+    """
+    try:
+        # Mark stale workers as offline first
+        dbh.workerOfflineStale(max_age_seconds=60)
+
+        # Delete workers offline for > 5 minutes
+        deleted_count = dbh.workerDeleteOffline(max_age_seconds=300)
+
+        log.info(f"Manual cleanup: deleted {deleted_count} offline worker(s)")
+        return {"deleted": deleted_count}
+    except Exception as exc:
+        log.error("Worker cleanup error: %s", exc)
+        raise HTTPException(status_code=500, detail="Cleanup failed") from exc

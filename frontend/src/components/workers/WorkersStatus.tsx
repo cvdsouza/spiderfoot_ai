@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
-import { listWorkers } from '../../api/workers';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { listWorkers, cleanupOfflineWorkers } from '../../api/workers';
 import type { WorkerRecord } from '../../api/workers';
 
 function statusBadge(status: WorkerRecord['status']) {
@@ -35,19 +35,49 @@ function relativeTime(ts: number): string {
 }
 
 export default function WorkersStatus() {
+  const queryClient = useQueryClient();
+
   const { data: workers = [], isLoading, error } = useQuery<WorkerRecord[]>({
     queryKey: ['workers'],
     queryFn: listWorkers,
     refetchInterval: 15_000,  // refresh every 15 s to match heartbeat cadence
   });
 
+  const cleanupMutation = useMutation({
+    mutationFn: cleanupOfflineWorkers,
+    onSuccess: (data) => {
+      // Refetch workers list after cleanup
+      queryClient.invalidateQueries({ queryKey: ['workers'] });
+      if (data.deleted > 0) {
+        console.log(`Cleaned up ${data.deleted} offline worker(s)`);
+      }
+    },
+    onError: (error) => {
+      console.error('Failed to cleanup offline workers:', error);
+    },
+  });
+
+  const handleRefresh = () => {
+    // Trigger cleanup and refresh
+    cleanupMutation.mutate();
+  };
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-[var(--sf-text)]">Workers</h1>
-        <span className="text-sm text-[var(--sf-text-secondary)]">
-          Auto-refreshes every 15 s
-        </span>
+        <div className="flex items-center gap-4">
+          <span className="text-sm text-[var(--sf-text-secondary)]">
+            Auto-refreshes every 15 s
+          </span>
+          <button
+            onClick={handleRefresh}
+            disabled={cleanupMutation.isPending}
+            className="px-4 py-2 bg-[var(--sf-primary)] text-white rounded hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium transition-opacity"
+          >
+            {cleanupMutation.isPending ? 'Refreshing...' : 'Refresh & Cleanup'}
+          </button>
+        </div>
       </div>
 
       {error && (

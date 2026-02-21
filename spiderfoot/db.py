@@ -2820,3 +2820,28 @@ class SpiderFootDb:
                 self.conn.commit()
             except sqlite3.Error as e:
                 raise IOError(f"SQL error marking stale workers offline: {e}") from e
+
+    def workerDeleteOffline(self, max_age_seconds: int = 300) -> int:
+        """Delete workers that have been offline for longer than the specified time.
+
+        Since workers are stateless and automatically re-register on heartbeat,
+        it's safe to delete their database records. They will reconnect and
+        re-register when they come back online.
+
+        Args:
+            max_age_seconds: Delete workers offline for longer than this (default: 300s = 5 minutes)
+
+        Returns:
+            int: Number of workers deleted
+        """
+        cutoff = int(time.time()) - max_age_seconds
+        with self.dbhLock:
+            try:
+                self.dbh.execute(
+                    "DELETE FROM tbl_workers WHERE status = 'offline' AND last_seen < ?",
+                    (cutoff,))
+                deleted_count = self.dbh.rowcount
+                self.conn.commit()
+                return deleted_count
+            except sqlite3.Error as e:
+                raise IOError(f"SQL error deleting offline workers: {e}") from e

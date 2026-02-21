@@ -20,3 +20,8 @@ export async function getWorker(workerId: string): Promise<WorkerRecord> {
   const { data } = await api.get<WorkerRecord>(`/workers/${workerId}`);
   return data;
 }
+
+export async function cleanupOfflineWorkers(): Promise<{ deleted: number }> {
+  const { data } = await api.post<{ deleted: number }>('/workers/cleanup');
+  return data;
+}

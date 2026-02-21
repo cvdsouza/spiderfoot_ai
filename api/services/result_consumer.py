@@ -55,6 +55,10 @@ class ResultConsumerManager:
         self.connection = None
         self.channel = None
 
+        # Worker cleanup configuration
+        self.worker_cleanup_timeout = int(os.environ.get('WORKER_CLEANUP_TIMEOUT', '300'))  # 5 minutes default
+        self.last_cleanup_time = 0
+
     def _ssl_options(self):
         """Return pika SSLOptions for TLS connections, or None."""
         if not self.rabbitmq_url.startswith('amqps://'):
@@ -153,6 +157,7 @@ class ResultConsumerManager:
         """Monitor active scans and spawn/stop consumers as needed.
 
         Runs in a background thread. Polls tbl_scan_instance every 10 seconds.
+        Also periodically cleans up offline workers.
         """
         log.info("Scan monitor thread started")
 
@@ -182,6 +187,12 @@ class ResultConsumerManager:
                         consumer = self.consumers.pop(scan_id)
                         consumer.stop()
 
+                # Cleanup offline workers every 2 minutes
+                current_time = time.time()
+                if current_time - self.last_cleanup_time >= 120:  # 2 minutes
+                    self._cleanup_offline_workers()
+                    self.last_cleanup_time = current_time
+
             except Exception as e:
                 log.error(f"Error in scan monitor: {e}")
 
@@ -197,12 +208,33 @@ class ResultConsumerManager:
             list: List of scan IDs in RUNNING state
         """
         try:
-            query = "SELECT scan_id FROM tbl_scan_instance WHERE status = 'RUNNING'"
-            result = self.dbh._query(query)
-            return [row[0] for row in result]
+            # Use direct database access since we need to filter by status
+            with self.dbh.dbhLock:
+                self.dbh.dbh.execute("SELECT guid FROM tbl_scan_instance WHERE status = 'RUNNING'")
+                result = self.dbh.dbh.fetchall()
+                return [row[0] for row in result]
         except Exception as e:
             log.error(f"Failed to query running scans: {e}")
             return []
+
+    def _cleanup_offline_workers(self):
+        """Clean up workers that have been offline for longer than the configured timeout.
+
+        Workers are stateless and automatically re-register on heartbeat, so it's safe
+        to delete their database records. They will reconnect and re-register when they
+        come back online.
+        """
+        try:
+            # First mark stale workers as offline (not seen in 60 seconds)
+            self.dbh.workerOfflineStale(max_age_seconds=60)
+
+            # Then delete workers that have been offline for the configured timeout
+            deleted_count = self.dbh.workerDeleteOffline(max_age_seconds=self.worker_cleanup_timeout)
+
+            if deleted_count > 0:
+                log.info(f"Cleaned up {deleted_count} offline worker(s) (timeout: {self.worker_cleanup_timeout}s)")
+        except Exception as e:
+            log.error(f"Failed to cleanup offline workers: {e}")
 
 
 class ConsumerThread(threading.Thread):

@@ -33,8 +33,17 @@ export default function LoginPage() {
     <div className="min-h-screen bg-[var(--sf-bg)] flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
+          {/* Logo */}
+          <div className="flex justify-center mb-4">
+            <img
+              src="/logo.svg"
+              alt="SpiderFoot AI"
+              className="w-24 h-24 animate-pulse-subtle"
+            />
+          </div>
+
           <h1 className="text-3xl font-bold text-[var(--sf-text)]">
-            <span className="text-[var(--sf-accent)]">Spider</span>Foot
+            <span className="text-[var(--sf-accent)]">Spider</span>Foot <span className="text-[var(--sf-accent)] text-xl">AI</span>
           </h1>
           <p className="text-sm text-[var(--sf-text-secondary)] mt-1">
             Open Source Intelligence Automation

@@ -1,5 +1,3 @@
-version: "3"
-
 # SpiderFoot scan worker services — STATELESS (Phase 12)
 #
 # Workers execute scans and publish results to RabbitMQ. The API server
@@ -25,10 +23,10 @@ version: "3"
 services:
   sf-worker-fast:
     build:
-      context: ..
+      context: .
+      dockerfile: Dockerfile
     image: spiderfoot
-    container_name: sf-worker-fast
-    command: python worker.py --queue fast --concurrency ${WORKER_FAST_CONCURRENCY:-2}
+    command: ["worker.py", "--queue", "fast", "--concurrency", "${WORKER_FAST_CONCURRENCY:-2}"]
     volumes:
       # CA certificate for RabbitMQ TLS verification.
       # Default ../certs/ca.crt works for local deployments.
@@ -43,10 +41,10 @@ services:
 
   sf-worker-slow:
     build:
-      context: ..
+      context: .
+      dockerfile: Dockerfile
     image: spiderfoot
-    container_name: sf-worker-slow
-    command: python worker.py --queue slow --concurrency ${WORKER_SLOW_CONCURRENCY:-1}
+    command: ["worker.py", "--queue", "slow", "--concurrency", "${WORKER_SLOW_CONCURRENCY:-1}"]
     volumes:
       # CA certificate for RabbitMQ TLS verification.
       # Default ../certs/ca.crt works for local deployments.
