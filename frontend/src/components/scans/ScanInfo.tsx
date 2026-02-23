@@ -52,6 +52,7 @@ export default function ScanInfo() {
       return data;
     },
     enabled: !!id && activeTab === 'correlations',
+    refetchInterval: activeTab === 'correlations' && statusData?.[5] === 'RUNNING' ? 5000 : false,
   });
 
   if (!statusData) {
@@ -92,7 +93,7 @@ export default function ScanInfo() {
         </div>
         <div className="mt-1 flex items-center gap-4 text-sm text-[var(--sf-text-muted)]">
           <span className="font-mono">{scanTarget}</span>
-          <RiskBadges riskMatrix={riskMatrix} onRiskClick={handleRiskClick} />
+          {riskMatrix && <RiskBadges riskMatrix={riskMatrix} onRiskClick={handleRiskClick} />}
         </div>
       </div>
 

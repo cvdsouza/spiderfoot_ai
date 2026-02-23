@@ -37,6 +37,8 @@ services:
       RABBITMQ_CA_CERT: "/etc/rabbitmq/certs/ca.crt"
       SPIDERFOOT_WORKER_NAME: "${SPIDERFOOT_WORKER_NAME:-worker-fast-1}"
       SPIDERFOOT_API_URL: "${SPIDERFOOT_API_URL:-http://spiderfoot:5001}"
+    networks:
+      - default
     restart: unless-stopped
 
   sf-worker-slow:
@@ -55,4 +57,14 @@ services:
       RABBITMQ_CA_CERT: "/etc/rabbitmq/certs/ca.crt"
       SPIDERFOOT_WORKER_NAME: "${SPIDERFOOT_WORKER_NAME:-worker-slow-1}"
       SPIDERFOOT_API_URL: "${SPIDERFOOT_API_URL:-http://spiderfoot:5001}"
+    networks:
+      - default
     restart: unless-stopped
+
+# When merged with main docker-compose.yml via --project-directory,
+# workers join the same default network as rabbitmq and spiderfoot services.
+# For remote deployments, this networks section can define external network.
+networks:
+  default:
+    name: spiderfoot_ai_default
+    external: true

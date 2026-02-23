@@ -11,7 +11,7 @@ from sflib import SpiderFoot
 from sfscan import startSpiderFootScanner
 from spiderfoot import SpiderFootDb, SpiderFootHelpers
 from api.services.module_categories import classify_modules
-from api.services.task_publisher import publish_scan_task, rabbitmq_available, RABBITMQ_URL
+from api.services.task_publisher import publish_scan_task, pre_declare_result_queue, rabbitmq_available, RABBITMQ_URL
 
 # Use an explicit spawn context rather than changing the global default.
 # This avoids conflicts with objects (e.g. Queue) created in the default
@@ -139,6 +139,18 @@ async def launch_scan(
     # ── Try to dispatch to a distributed worker via RabbitMQ ──────────
     if RABBITMQ_URL and rabbitmq_available():
         queue_type = classify_modules(modlist_str)
+
+        # Create scan instance in database BEFORE dispatching to worker
+        # This allows the result consumer to start monitoring immediately
+        import time
+        dbh = SpiderFootDb(config)
+        try:
+            dbh.scanInstanceCreate(scan_id, scan_name, scan_target)
+            dbh.scanInstanceSet(scan_id, started=time.time(), status='RUNNING')
+        except Exception as e:
+            log.error(f"Scan [{scan_id}] failed to create database record: {e}")
+            return ("ERROR", f"Failed to create scan: {e}")
+
         task = {
             "scan_id": scan_id,
             "scan_name": scan_name,
@@ -149,6 +161,12 @@ async def launch_scan(
             "api_url": os.environ.get('SPIDERFOOT_API_URL', 'http://localhost:5001'),
             "result_mode": "rabbitmq",  # Workers publish results to RabbitMQ (stateless)
         }
+        # Pre-declare the result queue BEFORE dispatching so the topic
+        # exchange can buffer events from the very first worker message.
+        # Without this, messages published before ConsumerThread binds
+        # its queue (up to 10 s later) are silently dropped.
+        pre_declare_result_queue(scan_id)
+
         if publish_scan_task(task, queue_type):
             log.info(f"Scan [{scan_id}] dispatched to '{queue_type}' worker queue")
             return ("SUCCESS", scan_id)

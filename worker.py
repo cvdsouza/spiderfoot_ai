@@ -199,7 +199,13 @@ def _connect_with_retry(max_retries: int = 10, delay: float = 5.0):
     for attempt in range(1, max_retries + 1):
         try:
             params = pika.URLParameters(RABBITMQ_URL)
-            params.heartbeat = 60
+            # Disable heartbeats: the _on_message callback blocks for the
+            # entire scan duration (minutes to hours), preventing the main
+            # loop from calling process_data_events() and sending heartbeats.
+            # With heartbeat=60 (the old value), RabbitMQ kills the connection
+            # roughly 60 s into every scan, causing tasks to be redelivered and
+            # FINISHED messages to be dropped.
+            params.heartbeat = 0
             params.blocked_connection_timeout = 300
             if ssl_opts is not None:
                 params.ssl_options = ssl_opts

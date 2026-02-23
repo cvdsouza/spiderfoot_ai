@@ -17,6 +17,12 @@ import json
 import logging
 import os
 import ssl
+
+try:
+    import pika
+except ImportError:
+    pika = None
+
 from spiderfoot import SpiderFootPlugin
 
 
@@ -79,9 +85,7 @@ class sfp__stor_rabbitmq(SpiderFootPlugin):
         if not self.rabbitmq_url.startswith('amqps://'):
             return None
 
-        try:
-            import pika
-        except ImportError:
+        if pika is None:
             self.error("pika module not found — install via: pip install pika")
             return None
 
@@ -101,14 +105,18 @@ class sfp__stor_rabbitmq(SpiderFootPlugin):
 
     def _connect(self):
         """Establish connection to RabbitMQ and declare exchange."""
-        try:
-            import pika
-        except ImportError:
+        if pika is None:
             self.error("pika module not found — install via: pip install pika")
             return
 
         params = pika.URLParameters(self.rabbitmq_url)
         params.socket_timeout = 5
+        # Disable heartbeats: pika only processes them inside
+        # process_data_events(), which is never called here — this connection
+        # is used purely for publishing events via basic_publish().  With the
+        # default 60 s heartbeat RabbitMQ kills the connection whenever there
+        # is a gap of >60 s between events (common for slow modules).
+        params.heartbeat = 0
 
         ssl_opts = self._ssl_options()
         if ssl_opts is not None:
@@ -189,39 +197,62 @@ class sfp__stor_rabbitmq(SpiderFootPlugin):
                 self.error(f"Failed to reconnect to RabbitMQ: {reconnect_error}")
 
     def finished(self):
-        """Called when scan finishes. Send lifecycle FINISHED message."""
-        if not self.channel:
-            return
+        """Called when scan finishes. Send lifecycle FINISHED message.
 
+        Attempts to publish the FINISHED message, reconnecting once if the
+        connection was lost during the scan (e.g. due to a broken pipe in
+        the log handler).  Without this retry the scan status can get stuck
+        at RUNNING indefinitely.
+        """
         scan_id = self.getScanId()
 
-        # Send lifecycle completion message
         message = {
             'scan_id': scan_id,
             'event': None,
             'lifecycle': 'FINISHED'
         }
 
-        try:
-            self.channel.basic_publish(
-                exchange=self.exchange_name,
-                routing_key=scan_id,
-                body=json.dumps(message).encode('utf-8'),
-                properties=pika.BasicProperties(
-                    delivery_mode=2,
-                    content_type='application/json',
-                )
-            )
-            self.info(f"Published FINISHED lifecycle message for scan {scan_id}")
-        except Exception as e:
-            self.error(f"Failed to publish FINISHED message: {e}")
-        finally:
-            # Close connection
+        published = False
+        for attempt in range(2):
+            # Reconnect if the channel is gone or the connection is closed
+            if not self.channel or not self.connection or self.connection.is_closed:
+                try:
+                    self._connect()
+                except Exception as e:
+                    self.error(f"Failed to reconnect to RabbitMQ for FINISHED message (attempt {attempt + 1}): {e}")
+                    continue
+
+            if not self.channel:
+                continue
+
             try:
-                if self.connection and not self.connection.is_closed:
-                    self.connection.close()
-                    self.debug("Closed RabbitMQ connection")
-            except Exception as close_error:
-                self.error(f"Error closing RabbitMQ connection: {close_error}")
+                self.channel.basic_publish(
+                    exchange=self.exchange_name,
+                    routing_key=scan_id,
+                    body=json.dumps(message).encode('utf-8'),
+                    properties=pika.BasicProperties(
+                        delivery_mode=2,
+                        content_type='application/json',
+                    )
+                )
+                self.info(f"Published FINISHED lifecycle message for scan {scan_id}")
+                published = True
+                break
+            except Exception as e:
+                self.error(f"Failed to publish FINISHED message (attempt {attempt + 1}): {e}")
+                # Mark connection as broken so the next attempt reconnects
+                self.connection = None
+                self.channel = None
+
+        if not published:
+            self.error(f"Could not publish FINISHED message for scan {scan_id} after retries")
+
+        # Close connection
+        try:
+            if self.connection and not self.connection.is_closed:
+                self.connection.close()
+                self.debug("Closed RabbitMQ connection")
+        except Exception as close_error:
+            self.error(f"Error closing RabbitMQ connection: {close_error}")
 
 # End of sfp__stor_rabbitmq class

@@ -33,6 +33,7 @@ class SpiderFootEvent():
     _sourceEventHash = None
     _moduleDataSource = None
     _actualSource = None
+    _hash = None  # Optional override; set by result_consumer to preserve original worker hash
     __id = None
 
     def __init__(self, eventType: str, data: str, module: str, sourceEvent: 'SpiderFootEvent') -> None:
@@ -132,6 +133,11 @@ class SpiderFootEvent():
         """
         if self.eventType == "ROOT":
             return "ROOT"
+
+        # Allow result_consumer to preserve the original hash published by the
+        # worker, so the parent→child hash chain remains intact in the DB.
+        if self._hash is not None:
+            return self._hash
 
         digestStr = self.__id.encode('raw_unicode_escape')
         return hashlib.sha256(digestStr).hexdigest()

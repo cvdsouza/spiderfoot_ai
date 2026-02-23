@@ -153,6 +153,10 @@ class ResultConsumerManager:
 
         log.info("Result consumer manager shut down")
 
+    # How long (seconds) a ConsumerThread may be idle before the watchdog
+    # assumes the FINISHED message was dropped and marks the scan complete.
+    STALE_CONSUMER_TIMEOUT = 600  # 10 minutes
+
     def _monitor_scans(self):
         """Monitor active scans and spawn/stop consumers as needed.
 
@@ -166,7 +170,24 @@ class ResultConsumerManager:
                 # Query for scans in RUNNING state
                 running_scans = self._get_running_scans()
 
-                # Start consumers for new scans
+                # ── Step 1: clean up dead ConsumerThreads ────────────────
+                # A thread can die before receiving FINISHED (e.g. connection
+                # reset).  Without this check the thread stays in self.consumers
+                # and _monitor_scans never spawns a replacement, leaving the
+                # scan stuck at RUNNING indefinitely.
+                for scan_id in list(self.consumers.keys()):
+                    consumer = self.consumers[scan_id]
+                    if not consumer.is_alive():
+                        if scan_id in running_scans:
+                            log.warning(
+                                f"Consumer thread for scan {scan_id} died unexpectedly "
+                                f"(lifecycle_received={consumer.lifecycle_received}) — will restart"
+                            )
+                        else:
+                            log.debug(f"Consumer for scan {scan_id} exited normally")
+                        self.consumers.pop(scan_id)
+
+                # ── Step 2: start consumers for new / restarted scans ────
                 for scan_id in running_scans:
                     if scan_id not in self.consumers:
                         log.info(f"Starting result consumer for scan {scan_id}")
@@ -180,16 +201,38 @@ class ResultConsumerManager:
                         consumer.start()
                         self.consumers[scan_id] = consumer
 
-                # Stop consumers for completed scans
+                # ── Step 3: stop live consumers for completed scans ──────
                 for scan_id in list(self.consumers.keys()):
                     if scan_id not in running_scans:
                         log.info(f"Stopping result consumer for completed scan {scan_id}")
                         consumer = self.consumers.pop(scan_id)
                         consumer.stop()
 
-                # Cleanup offline workers every 2 minutes
+                # ── Step 4: watchdog — detect scans whose FINISHED was dropped
+                # If a ConsumerThread has received no messages for
+                # STALE_CONSUMER_TIMEOUT seconds the FINISHED lifecycle message
+                # was almost certainly dropped (connection broken in the worker's
+                # sfp__stor_rabbitmq or queue deleted prematurely).  Mark the
+                # scan FINISHED so the UI reflects reality.
+                now = time.time()
+                for scan_id, consumer in list(self.consumers.items()):
+                    idle_secs = now - getattr(consumer, 'last_message_time', now)
+                    if idle_secs >= self.STALE_CONSUMER_TIMEOUT:
+                        log.warning(
+                            f"Scan {scan_id} consumer has been idle for {idle_secs:.0f}s "
+                            f"(>{self.STALE_CONSUMER_TIMEOUT}s threshold) — "
+                            f"FINISHED message likely dropped; marking scan as FINISHED"
+                        )
+                        try:
+                            self.dbh.scanInstanceSet(scan_id, status='FINISHED', ended=int(now))
+                        except Exception as e:
+                            log.error(f"Failed to mark stale scan {scan_id} as FINISHED: {e}")
+                        consumer.stop()
+                        self.consumers.pop(scan_id)
+
+                # ── Step 5: cleanup offline workers every 2 minutes ──────
                 current_time = time.time()
-                if current_time - self.last_cleanup_time >= 120:  # 2 minutes
+                if current_time - self.last_cleanup_time >= 120:
                     self._cleanup_offline_workers()
                     self.last_cleanup_time = current_time
 
@@ -266,6 +309,14 @@ class ConsumerThread(threading.Thread):
         self.connection = None
         self.channel = None
         self.stop_event = threading.Event()
+        # Set to True when a FINISHED/FAILED/ABORTED lifecycle is received.
+        # The queue is only deleted when this is True; premature exits (e.g.
+        # connection drops) leave the queue intact so a replacement thread or
+        # a late FINISHED message from the worker can still be consumed.
+        self.lifecycle_received = False
+        # Tracks the last time any message was received. Used by the watchdog
+        # in _monitor_scans to detect scans whose FINISHED was dropped.
+        self.last_message_time = time.time()
 
     def _ssl_options(self):
         """Return pika SSLOptions for TLS connections, or None."""
@@ -310,12 +361,15 @@ class ConsumerThread(threading.Thread):
             self.connection = pika.BlockingConnection(params)
             self.channel = self.connection.channel()
 
-            # Declare queue (auto-delete when consumer disconnects)
+            # Declare queue with settings that match the pre-declared queue
+            # created by pre_declare_result_queue() in scan_manager.py.
+            # Must NOT be exclusive — the queue is pre-created by a different
+            # connection so that worker events are buffered from t=0.
             self.channel.queue_declare(
                 queue=self.queue_name,
-                durable=False,
-                exclusive=True,
-                auto_delete=True,
+                durable=True,
+                exclusive=False,
+                auto_delete=False,
                 arguments={'x-message-ttl': 86400000}  # 24h TTL
             )
 
@@ -346,6 +400,19 @@ class ConsumerThread(threading.Thread):
         except Exception as e:
             log.error(f"Consumer thread error for scan {self.scan_id}: {e}")
         finally:
+            # Only delete the queue when a lifecycle message (FINISHED/FAILED/
+            # ABORTED) was received and all messages have been consumed.
+            # If we exit due to a connection error (lifecycle_received=False),
+            # leave the queue intact so a replacement ConsumerThread can pick
+            # up any pending messages — including a FINISHED that the worker
+            # may publish after this thread has gone away.
+            if self.lifecycle_received and self.channel and self.channel.is_open:
+                try:
+                    self.channel.queue_delete(queue=self.queue_name)
+                    log.debug(f"Deleted result queue {self.queue_name}")
+                except Exception:
+                    pass
+
             # Close connection
             if self.connection and not self.connection.is_closed:
                 try:
@@ -365,19 +432,33 @@ class ConsumerThread(threading.Thread):
             body: Message body (JSON)
         """
         try:
+            self.last_message_time = time.time()
             message = json.loads(body.decode('utf-8'))
             scan_id = message.get('scan_id')
             lifecycle = message.get('lifecycle')
             event_data = message.get('event')
+            log_data = message.get('log')
 
             if scan_id != self.scan_id:
                 log.warning(f"Received message for different scan {scan_id}, expected {self.scan_id}")
                 channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
                 return
 
+            # Handle log entry forwarded from worker via _RabbitMQLogHandler
+            if log_data:
+                level = log_data.get('level', 'STATUS')
+                msg = log_data.get('message', '')
+                component = log_data.get('component', 'SpiderFoot')
+                log_time = log_data.get('time', time.time())
+                self.dbh.scanLogEvents([(scan_id, level, msg, component, log_time)])
+                log.debug(f"Stored log [{level}] for scan {scan_id}")
+                channel.basic_ack(delivery_tag=method.delivery_tag)
+                return
+
             # Handle lifecycle messages
             if lifecycle:
                 log.info(f"Received lifecycle {lifecycle} for scan {scan_id}")
+                self.lifecycle_received = True
                 if lifecycle == 'FINISHED':
                     self.dbh.scanInstanceSet(scan_id, status='FINISHED', ended=int(time.time()))
                     # Stop consuming after FINISHED
@@ -395,24 +476,32 @@ class ConsumerThread(threading.Thread):
             # Handle regular event
             if event_data:
                 # Reconstruct SpiderFootEvent from event_data
-                # For now, just store the essential fields directly
-                # The proper way would be to reconstruct a full SpiderFootEvent object
-                # but that requires importing from spiderfoot module which may cause circular deps
-
-                # Simple approach: store using scanEventStore with a minimal event object
-                # We'll need to create a simple event-like object
                 from spiderfoot.event import SpiderFootEvent
 
-                # Create a minimal event for storage
-                # We need to reconstruct the sourceEvent chain, but for now use None
                 event_type = event_data.get('type', 'UNKNOWN')
                 event_module = event_data.get('module', 'unknown')
                 event_data_str = event_data.get('data', '')
+                source_event_hash = event_data.get('source_event_hash', 'ROOT')
 
-                # Create event (sourceEvent=None for now, as we don't have the full chain)
-                sfEvent = SpiderFootEvent(event_type, event_data_str, event_module, None)
+                # For ROOT events, sourceEvent can be None.
+                # For ALL other events (including direct ROOT children whose
+                # source_event_hash == 'ROOT'), supply a minimal dummy source event —
+                # the DB only stores the hash, never the object itself.
+                # Passing None for a non-ROOT eventType raises TypeError in the
+                # sourceEvent setter → nack(requeue=True) → infinite redelivery storm.
+                if event_type == 'ROOT':
+                    source_event = None
+                else:
+                    # Use 'ROOT' as placeholder data — the data setter raises for
+                    # empty strings on ALL event types, and the DB only stores the
+                    # hash, never the object's data field.
+                    source_event = SpiderFootEvent('ROOT', 'ROOT', '', None)
+                    source_event._hash = source_event_hash
 
-                # Set additional attributes
+                # Create the actual event
+                sfEvent = SpiderFootEvent(event_type, event_data_str, event_module, source_event)
+
+                # Set additional attributes from the message
                 if 'generated' in event_data:
                     sfEvent._generated = event_data['generated']
                 if 'confidence' in event_data:
