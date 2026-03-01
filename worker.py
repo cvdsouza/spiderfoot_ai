@@ -173,17 +173,37 @@ def _make_handler(current_scan_ref: list):
                  scan_id, task.get('scan_target'))
 
         current_scan_ref[0] = scan_id
+        scan_succeeded = False
         try:
             from api.services.scan_runner import run_scan_task  # noqa: PLC0415
             run_scan_task(task)
-            channel.basic_ack(method.delivery_tag)
-            log.info("Scan %s finished — ack'd", scan_id)
+            scan_succeeded = True
         except Exception as exc:
             log.error("Scan %s failed: %s", scan_id, exc)
-            # nack without requeue → dead-letter if DLX is configured
-            channel.basic_nack(method.delivery_tag, requeue=False)
         finally:
             current_scan_ref[0] = ''
+
+        # Ack/nack outside the scan try-block so a channel error doesn't mask the
+        # scan result.  If the broker closed the channel while the scan was running
+        # (consumer_timeout), the ack will raise here — log it and do NOT nack,
+        # since the scan completed successfully and results are already in the DB.
+        if scan_succeeded:
+            try:
+                channel.basic_ack(method.delivery_tag)
+                log.info("Scan %s finished — ack'd", scan_id)
+            except Exception as ack_exc:
+                log.error(
+                    "Scan %s completed but ack failed (broker closed channel?): %s "
+                    "— message will be redelivered. Check consumer_timeout setting.",
+                    scan_id, ack_exc,
+                )
+        else:
+            try:
+                # nack without requeue → dead-letter if DLX is configured,
+                # otherwise dropped; prevents infinite redeliver of broken scans.
+                channel.basic_nack(method.delivery_tag, requeue=False)
+            except Exception as nack_exc:
+                log.error("Scan %s nack failed: %s", scan_id, nack_exc)
 
     return _on_message
 

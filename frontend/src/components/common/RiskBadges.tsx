@@ -14,7 +14,7 @@ export default function RiskBadges({ riskMatrix, onRiskClick }: RiskBadgesProps)
       {riskMatrix.HIGH > 0 && (
         <span
           onClick={() => onRiskClick?.('HIGH')}
-          className={`inline-flex items-center rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-800 dark:bg-red-900 dark:text-red-200 ${base}`}
+          className={`inline-flex items-center rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300 ${base}`}
         >
           {riskMatrix.HIGH} HIGH
         </span>
@@ -22,7 +22,7 @@ export default function RiskBadges({ riskMatrix, onRiskClick }: RiskBadgesProps)
       {riskMatrix.MEDIUM > 0 && (
         <span
           onClick={() => onRiskClick?.('MEDIUM')}
-          className={`inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-800 dark:bg-orange-900 dark:text-orange-200 ${base}`}
+          className={`inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-900/40 dark:text-orange-300 ${base}`}
         >
           {riskMatrix.MEDIUM} MED
         </span>
@@ -30,7 +30,7 @@ export default function RiskBadges({ riskMatrix, onRiskClick }: RiskBadgesProps)
       {riskMatrix.LOW > 0 && (
         <span
           onClick={() => onRiskClick?.('LOW')}
-          className={`inline-flex items-center rounded bg-yellow-100 px-1.5 py-0.5 text-xs font-medium text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200 ${base}`}
+          className={`inline-flex items-center rounded bg-yellow-100 px-1.5 py-0.5 text-xs font-medium text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300 ${base}`}
         >
           {riskMatrix.LOW} LOW
         </span>
@@ -38,7 +38,7 @@ export default function RiskBadges({ riskMatrix, onRiskClick }: RiskBadgesProps)
       {riskMatrix.INFO > 0 && (
         <span
           onClick={() => onRiskClick?.('INFO')}
-          className={`inline-flex items-center rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200 ${base}`}
+          className={`inline-flex items-center rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 ${base}`}
         >
           {riskMatrix.INFO} INFO
         </span>

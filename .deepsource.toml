@@ -1,0 +1,41 @@
+version = 1
+
+test_patterns = [
+  "test/**",
+  "test/unit/**",
+  "test/integration/**",
+  "test/acceptance/**",
+]
+
+exclude_patterns = [
+  "**/__pycache__/**",
+  "**/node_modules/**",
+  "frontend/dist/**",
+  "docs/**",
+  "certs/**",
+]
+
+[[analyzers]]
+name = "python"
+enabled = true
+
+  [analyzers.meta]
+  runtime_version = "3.12.x"
+  max_line_length = 120
+  skip_doc_coverage = ["module", "magic", "init"]
+
+[[analyzers]]
+name = "javascript"
+enabled = true
+
+  [analyzers.meta]
+  plugins = ["react"]
+  environment = ["browser", "es2022"]
+
+[[analyzers]]
+name = "docker"
+enabled = true
+
+[[analyzers]]
+name = "secrets"
+enabled = true

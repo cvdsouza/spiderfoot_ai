@@ -31,6 +31,8 @@ services:
       - ./certs:/etc/rabbitmq/certs:ro
       # TLS-only broker configuration
       - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      # Advanced config: disables consumer_timeout (can't be set to 0/false in rabbitmq.conf)
+      - ./rabbitmq/advanced.config:/etc/rabbitmq/advanced.config:ro
       # Persistent queue data
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:

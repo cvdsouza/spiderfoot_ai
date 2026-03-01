@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { getScanGraph } from '../../api/results';
-import { useRef, useState, useCallback, useMemo, useEffect, lazy, Suspense } from 'react';
+import { useRef, useState, useCallback, useMemo, useEffect, useLayoutEffect, lazy, Suspense } from 'react';
 import ForceGraph2D, { type ForceGraphMethods as ForceGraph2DMethods } from 'react-force-graph-2d';
 import type { ForceGraphMethods as ForceGraph3DMethods } from 'react-force-graph-3d';
 
@@ -32,12 +32,23 @@ interface GraphNode {
   val: number;
   color: string;
   isRoot: boolean;
+  nodeType: string;
 }
 
 interface GraphLink {
   source: string;
   target: string;
 }
+
+const LEGEND_TYPES = [
+  { key: 'Root',       color: '#ef4444' },
+  { key: 'IP Address', color: '#f59e0b' },
+  { key: 'Domain',     color: '#06b6d4' },
+  { key: 'Email',      color: '#8b5cf6' },
+  { key: 'URL',        color: '#10b981' },
+  { key: 'ASN',        color: '#ec4899' },
+  { key: 'Other',      color: '#6b7280' },
+] as const;
 
 // Heuristic to detect the type of an OSINT entity from its label
 function detectNodeColor(label: string, isRoot: boolean): string {
@@ -52,6 +63,18 @@ function detectNodeColor(label: string, isRoot: boolean): string {
   return '#6b7280'; // gray - other
 }
 
+function detectNodeType(label: string, isRoot: boolean): string {
+  if (isRoot) return 'Root';
+  const l = label.toLowerCase();
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(l)) return 'IP Address';
+  if (/^[a-f0-9:]{6,}$/.test(l)) return 'IP Address';
+  if (/^[a-z0-9.-]+\.[a-z]{2,}$/.test(l)) return 'Domain';
+  if (/@/.test(l)) return 'Email';
+  if (/^https?:\/\//.test(l)) return 'URL';
+  if (/^AS\d+/i.test(l)) return 'ASN';
+  return 'Other';
+}
+
 export default function GraphView({ scanId }: GraphViewProps) {
   const graph2DRef = useRef<ForceGraph2DMethods>(undefined);
   const graph3DRef = useRef<ForceGraph3DMethods>(undefined);
@@ -61,7 +84,8 @@ export default function GraphView({ scanId }: GraphViewProps) {
   const [highlightLinks, setHighlightLinks] = useState<Set<string>>(new Set());
   const [hoverNode, setHoverNode] = useState<string | null>(null);
   const [mode, setMode] = useState<'2d' | '3d'>('2d');
-  const [containerWidth, setContainerWidth] = useState(800);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
 
   const { data: backendData, isLoading } = useQuery({
     queryKey: ['scanGraph', scanId],
@@ -71,17 +95,22 @@ export default function GraphView({ scanId }: GraphViewProps) {
     },
   });
 
-  // Measure container width
-  useEffect(() => {
+  // useLayoutEffect fires synchronously after React commits the DOM but before
+  // the browser paints, so clientWidth is always the real layout value.
+  // Depends on backendData: during the isLoading early-return the containerRef
+  // div hasn't mounted yet, so we re-run once data arrives and the div exists.
+  useLayoutEffect(() => {
     if (!containerRef.current) return;
+    setContainerWidth(containerRef.current.clientWidth);
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        setContainerWidth(entry.contentRect.width);
+        const w = Math.floor(entry.contentRect.width);
+        if (w > 0) setContainerWidth(w);
       }
     });
     observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, []);
+  }, [backendData]);
 
   // Build adjacency for neighbor highlighting
   const adjacency = useMemo(() => {
@@ -111,6 +140,7 @@ export default function GraphView({ scanId }: GraphViewProps) {
         val: isRoot ? 10 : Math.max(1, Math.min(8, neighbors)),
         color: detectNodeColor(n.label, isRoot),
         isRoot,
+        nodeType: detectNodeType(n.label, isRoot),
       };
     });
 
@@ -128,6 +158,47 @@ export default function GraphView({ scanId }: GraphViewProps) {
 
     return { nodes, links };
   }, [backendData, adjacency]);
+
+  // Per-type node counts (for legend badges)
+  const typeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const n of graphData.nodes) {
+      counts.set(n.nodeType, (counts.get(n.nodeType) || 0) + 1);
+    }
+    return counts;
+  }, [graphData.nodes]);
+
+  // Filtered dataset — excludes hidden node types and their edges
+  const filteredGraphData = useMemo(() => {
+    if (hiddenTypes.size === 0) return graphData;
+    const visibleIds = new Set(
+      graphData.nodes.filter((n) => !hiddenTypes.has(n.nodeType)).map((n) => n.id),
+    );
+    return {
+      nodes: graphData.nodes.filter((n) => visibleIds.has(n.id)),
+      links: graphData.links.filter((l) => {
+        const srcId = typeof l.source === 'object' ? (l.source as any).id : l.source;
+        const tgtId = typeof l.target === 'object' ? (l.target as any).id : l.target;
+        return visibleIds.has(srcId) && visibleIds.has(tgtId);
+      }),
+    };
+  }, [graphData, hiddenTypes]);
+
+  // Clear selected node if its type is hidden
+  useEffect(() => {
+    if (selectedNode && hiddenTypes.has(selectedNode.nodeType)) {
+      setSelectedNode(null);
+    }
+  }, [hiddenTypes, selectedNode]);
+
+  function toggleType(key: string) {
+    setHiddenTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   const handleNodeHover = useCallback(
     (node: any) => {
@@ -251,12 +322,22 @@ export default function GraphView({ scanId }: GraphViewProps) {
     return <p className="text-[var(--sf-text-muted)]">No graph data available yet.</p>;
   }
 
+  const isFiltering = hiddenTypes.size > 0;
+
   return (
-    <div ref={containerRef}>
+    <div>
       {/* Toolbar */}
       <div className="mb-3 flex items-center gap-3">
-        <span className="text-xs text-[var(--sf-text-muted)]">{graphData.nodes.length} nodes</span>
-        <span className="text-xs text-[var(--sf-text-muted)]">{graphData.links.length} edges</span>
+        <span className="text-xs text-[var(--sf-text-muted)]">
+          {isFiltering
+            ? `${filteredGraphData.nodes.length} / ${graphData.nodes.length} nodes`
+            : `${graphData.nodes.length} nodes`}
+        </span>
+        <span className="text-xs text-[var(--sf-text-muted)]">
+          {isFiltering
+            ? `${filteredGraphData.links.length} / ${graphData.links.length} edges`
+            : `${graphData.links.length} edges`}
+        </span>
 
         <div className="ml-auto flex gap-2">
           {/* 2D/3D toggle */}
@@ -292,23 +373,52 @@ export default function GraphView({ scanId }: GraphViewProps) {
         </div>
       </div>
 
-      {/* Legend */}
-      <div className="mb-3 flex flex-wrap gap-3 text-xs text-[var(--sf-text-muted)]">
-        <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-[#ef4444]" /> Root</span>
-        <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-[#f59e0b]" /> IP Address</span>
-        <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-[#06b6d4]" /> Domain</span>
-        <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-[#8b5cf6]" /> Email</span>
-        <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-[#10b981]" /> URL</span>
-        <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-[#ec4899]" /> ASN</span>
-        <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full bg-[#6b7280]" /> Other</span>
+      {/* Legend — each item is a clickable filter toggle */}
+      <div className="mb-3 flex flex-wrap items-center gap-1.5 text-xs">
+        {LEGEND_TYPES.map(({ key, color }) => {
+          const count = typeCounts.get(key) || 0;
+          if (count === 0) return null;
+          const hidden = hiddenTypes.has(key);
+          return (
+            <button
+              key={key}
+              onClick={() => toggleType(key)}
+              title={hidden ? `Show ${key} nodes` : `Hide ${key} nodes`}
+              className={`flex items-center gap-1 rounded-md border px-2 py-1 transition-all ${
+                hidden
+                  ? 'border-[var(--sf-border)] opacity-40'
+                  : 'border-[var(--sf-border)] hover:bg-[var(--sf-bg-secondary)]'
+              }`}
+            >
+              <span
+                className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ backgroundColor: hidden ? '#9ca3af' : color }}
+              />
+              <span className={`text-[var(--sf-text)] ${hidden ? 'line-through' : ''}`}>{key}</span>
+              <span className="text-[var(--sf-text-muted)]">({count})</span>
+            </button>
+          );
+        })}
+        {isFiltering && (
+          <button
+            onClick={() => setHiddenTypes(new Set())}
+            className="ml-1 text-xs text-[var(--sf-primary)] underline-offset-2 hover:underline"
+          >
+            Show all
+          </button>
+        )}
       </div>
 
-      {/* Graph container */}
-      <div className="overflow-hidden rounded-lg border border-[var(--sf-border)]" style={{ height: 600 }}>
-        {mode === '2d' ? (
+      {/* Graph container — ref here so canvas width matches exactly */}
+      <div ref={containerRef} className="overflow-hidden rounded-lg border border-[var(--sf-border)]" style={{ height: 600 }}>
+        {containerWidth === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="h-6 w-6 animate-spin rounded-full border-4 border-[var(--sf-primary)] border-t-transparent" />
+          </div>
+        ) : mode === '2d' ? (
           <ForceGraph2D
             ref={graph2DRef}
-            graphData={graphData}
+            graphData={filteredGraphData}
             width={containerWidth}
             height={600}
             backgroundColor="transparent"
@@ -337,7 +447,7 @@ export default function GraphView({ scanId }: GraphViewProps) {
           >
             <ForceGraph3D
               ref={graph3DRef}
-              graphData={graphData}
+              graphData={filteredGraphData}
               width={containerWidth}
               height={600}
               backgroundColor="rgba(0,0,0,0)"
@@ -372,11 +482,15 @@ export default function GraphView({ scanId }: GraphViewProps) {
               <span className="font-mono">{selectedNode.name}</span>
             </div>
             <div>
+              <span className="text-[var(--sf-text-muted)]">Type:</span>{' '}
+              {selectedNode.nodeType}
+            </div>
+            <div>
               <span className="text-[var(--sf-text-muted)]">Connections:</span>{' '}
               {adjacency.get(selectedNode.id)?.size || 0}
             </div>
             {selectedNode.isRoot && (
-              <span className="inline-block rounded bg-red-100 px-1.5 py-0.5 text-red-800 dark:bg-red-900/30 dark:text-red-200">
+              <span className="inline-block rounded bg-red-100 px-1.5 py-0.5 text-red-700 dark:bg-red-900/40 dark:text-red-300">
                 Root Entity
               </span>
             )}

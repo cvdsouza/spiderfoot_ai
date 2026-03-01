@@ -14,19 +14,19 @@ interface AiInsightsProps {
 const SEVERITY_COLORS: Record<string, { active: string; inactive: string }> = {
   HIGH: {
     active: 'bg-red-600 text-white dark:bg-red-700',
-    inactive: 'bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-200',
+    inactive: 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-300 dark:hover:bg-red-900/60',
   },
   MEDIUM: {
     active: 'bg-orange-600 text-white dark:bg-orange-700',
-    inactive: 'bg-orange-100 text-orange-800 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-200',
+    inactive: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300 dark:hover:bg-orange-900/60',
   },
   LOW: {
     active: 'bg-yellow-600 text-white dark:bg-yellow-700',
-    inactive: 'bg-yellow-100 text-yellow-800 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-200',
+    inactive: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/40 dark:text-yellow-300 dark:hover:bg-yellow-900/60',
   },
   INFO: {
     active: 'bg-blue-600 text-white dark:bg-blue-700',
-    inactive: 'bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-200',
+    inactive: 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-300 dark:hover:bg-blue-900/60',
   },
 };
 
@@ -215,9 +215,9 @@ export default function AiInsights({ scanId, scanStatus }: AiInsightsProps) {
 
       {/* ── Failed indicator ── */}
       {activeAnalysis?.status === 'failed' && (
-        <div className="mb-4 rounded-lg border border-red-300 bg-red-50 p-4 dark:border-red-900 dark:bg-red-900/20">
-          <p className="text-sm font-medium text-red-800 dark:text-red-200">Analysis Failed</p>
-          <p className="mt-1 text-xs text-red-600 dark:text-red-300">{activeAnalysis.error}</p>
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-900/20">
+          <p className="text-sm font-medium text-red-700 dark:text-red-300">Analysis Failed</p>
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{activeAnalysis.error}</p>
           <button
             onClick={() => handleDelete(activeAnalysis.id)}
             className="mt-2 text-xs text-red-600 underline hover:text-red-800 dark:text-red-300"
@@ -245,10 +245,10 @@ export default function AiInsights({ scanId, scanStatus }: AiInsightsProps) {
               <h3 className="text-sm font-semibold">Executive Summary</h3>
               <span className={`rounded px-2 py-0.5 text-xs font-medium ${
                 activeAnalysis.result.risk_assessment === 'HIGH'
-                  ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-200'
+                  ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
                   : activeAnalysis.result.risk_assessment === 'MEDIUM'
-                    ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-200'
-                    : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-200'
+                    ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
+                    : 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
               }`}>
                 {activeAnalysis.result.risk_assessment} RISK
               </span>
@@ -263,10 +263,10 @@ export default function AiInsights({ scanId, scanStatus }: AiInsightsProps) {
                 <h3 className="text-sm font-semibold">Target Profile</h3>
                 <span className={`rounded px-2 py-0.5 text-xs font-medium ${
                   activeAnalysis.result.target_profile.exposure_level === 'HIGH'
-                    ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-200'
+                    ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
                     : activeAnalysis.result.target_profile.exposure_level === 'MEDIUM'
-                      ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-200'
-                      : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-200'
+                      ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
+                      : 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
                 }`}>
                   {activeAnalysis.result.target_profile.exposure_level} EXPOSURE
                 </span>
@@ -367,8 +367,8 @@ export default function AiInsights({ scanId, scanStatus }: AiInsightsProps) {
 
                             {finding.recommendation && (
                               <div className="mb-2 rounded bg-blue-50 p-2 dark:bg-blue-900/20">
-                                <span className="text-xs font-medium text-blue-800 dark:text-blue-200">Recommendation: </span>
-                                <span className="text-xs text-blue-700 dark:text-blue-300">{finding.recommendation}</span>
+                                <span className="text-xs font-medium text-blue-700 dark:text-blue-300">Recommendation: </span>
+                                <span className="text-xs text-blue-600 dark:text-blue-300">{finding.recommendation}</span>
                               </div>
                             )}
 

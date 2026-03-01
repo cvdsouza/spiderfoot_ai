@@ -4,9 +4,9 @@ import type { WorkerRecord } from '../../api/workers';
 
 function statusBadge(status: WorkerRecord['status']) {
   const styles: Record<WorkerRecord['status'], string> = {
-    idle:    'bg-green-500/10 text-green-400',
-    busy:    'bg-yellow-500/10 text-yellow-400',
-    offline: 'bg-red-500/10 text-red-400',
+    idle:    'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
+    busy:    'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
+    offline: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
   };
   return (
     <span className={`text-xs font-medium px-2 py-0.5 rounded ${styles[status]}`}>
@@ -17,8 +17,8 @@ function statusBadge(status: WorkerRecord['status']) {
 
 function queueBadge(queueType: string) {
   const style = queueType === 'slow'
-    ? 'bg-orange-500/10 text-orange-400'
-    : 'bg-blue-500/10 text-blue-400';
+    ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
+    : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300';
   return (
     <span className={`text-xs font-medium px-2 py-0.5 rounded ${style}`}>
       {queueType}

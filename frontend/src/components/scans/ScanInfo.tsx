@@ -1,6 +1,6 @@
 import { useParams, Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { getScanSummary } from '../../api/scans';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { getScanSummary, stopScan } from '../../api/scans';
 import { getScanCorrelations } from '../../api/results';
 import { useScanStatus } from '../../hooks/useScanStatus';
 import StatusBadge from '../common/StatusBadge';
@@ -22,6 +22,7 @@ export default function ScanInfo() {
   const [activeTab, setActiveTab] = useState<TabType>('summary');
   const [browseEventType, setBrowseEventType] = useState<string>('ALL');
   const [riskFilter, setRiskFilter] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const handleEventTypeClick = (eventType: string) => {
     setBrowseEventType(eventType);
@@ -32,6 +33,11 @@ export default function ScanInfo() {
     setRiskFilter(risk);
     setActiveTab('correlations');
   };
+
+  const stopMutation = useMutation({
+    mutationFn: () => stopScan(id!),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scanStatus', id] }),
+  });
 
   const { data: statusData } = useScanStatus(id!);
 
@@ -68,6 +74,9 @@ export default function ScanInfo() {
   const status = statusData[5] as string;
   const riskMatrix = statusData[6] as RiskMatrix;
 
+  const isActive = ['RUNNING', 'STARTING', 'STARTED', 'INITIALIZING'].includes(status);
+  const isStopping = status === 'ABORT-REQUESTED';
+
   const tabs: { key: TabType; label: string }[] = [
     { key: 'summary', label: 'Summary' },
     { key: 'correlations', label: 'Correlations' },
@@ -83,13 +92,22 @@ export default function ScanInfo() {
       {/* Header */}
       <div className="mb-6">
         <div className="flex items-center gap-3">
-          <Link to="/" className="text-[var(--sf-text-muted)] hover:text-[var(--sf-text)]">
+          <Link to="/scans" className="text-[var(--sf-text-muted)] hover:text-[var(--sf-text)]">
             &larr; Scans
           </Link>
         </div>
         <div className="mt-2 flex items-center gap-4">
           <h1 className="text-2xl font-bold">{scanName}</h1>
           <StatusBadge status={status} />
+          {(isActive || isStopping) && (
+            <button
+              onClick={() => stopMutation.mutate()}
+              disabled={stopMutation.isPending || isStopping}
+              className="rounded-md bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50"
+            >
+              {isStopping ? 'Stopping...' : 'Stop Scan'}
+            </button>
+          )}
         </div>
         <div className="mt-1 flex items-center gap-4 text-sm text-[var(--sf-text-muted)]">
           <span className="font-mono">{scanTarget}</span>
@@ -198,16 +216,16 @@ export default function ScanInfo() {
                 const colorMap: Record<string, string> = {
                   HIGH: isActive
                     ? 'bg-red-600 text-white dark:bg-red-700'
-                    : 'bg-red-100 text-red-800 hover:bg-red-200 dark:bg-red-900/30 dark:text-red-200 dark:hover:bg-red-900/50',
+                    : 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-300 dark:hover:bg-red-900/60',
                   MEDIUM: isActive
                     ? 'bg-orange-600 text-white dark:bg-orange-700'
-                    : 'bg-orange-100 text-orange-800 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-200 dark:hover:bg-orange-900/50',
+                    : 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300 dark:hover:bg-orange-900/60',
                   LOW: isActive
                     ? 'bg-yellow-600 text-white dark:bg-yellow-700'
-                    : 'bg-yellow-100 text-yellow-800 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-200 dark:hover:bg-yellow-900/50',
+                    : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/40 dark:text-yellow-300 dark:hover:bg-yellow-900/60',
                   INFO: isActive
                     ? 'bg-blue-600 text-white dark:bg-blue-700'
-                    : 'bg-blue-100 text-blue-800 hover:bg-blue-200 dark:bg-blue-900/30 dark:text-blue-200 dark:hover:bg-blue-900/50',
+                    : 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-300 dark:hover:bg-blue-900/60',
                 };
                 return (
                   <button
@@ -244,7 +262,12 @@ export default function ScanInfo() {
         )}
 
         {activeTab === 'browse' && (
-          <EventBrowser scanId={id!} isRunning={status === 'RUNNING'} initialEventType={browseEventType} />
+          <EventBrowser
+            scanId={id!}
+            isRunning={status === 'RUNNING'}
+            initialEventType={browseEventType}
+            eventTypes={(summaryData as any[]).map((row: any[]) => String(row[0])).sort()}
+          />
         )}
 
         {activeTab === 'graph' && (

@@ -6,7 +6,7 @@ import logging
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from api.dependencies import get_config, get_db
 from api.middleware.auth import require_permission
@@ -57,6 +57,49 @@ def scan_correlations(scan_id: str, user: dict = Depends(require_permission("res
     return retdata
 
 
+@router.post("/scans/{scan_id}/correlations/run", status_code=202)
+def run_scan_correlations(
+    scan_id: str,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(require_permission("results", "write")),
+    dbh: SpiderFootDb = Depends(get_db),
+    config: dict = Depends(get_config),
+) -> dict:
+    """(Re-)run correlation rules for a completed scan.
+
+    Returns 202 Accepted immediately; correlations run in the background.
+    Useful when correlations were skipped (e.g. ConsumerThread died before
+    receiving FINISHED) or after correlation rules are updated.
+    """
+    from api.services.result_consumer import _run_correlations  # noqa: PLC0415
+
+    scan = dbh.scanInstanceGet(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Clear existing correlations so results are fresh, then commit
+    # immediately so the background task starts with a clean slate and
+    # no open write transaction blocks other DB writers.
+    with dbh.dbhLock:
+        dbh.dbh.execute(
+            "DELETE FROM tbl_scan_correlation_results_events WHERE correlation_id IN "
+            "(SELECT id FROM tbl_scan_correlation_results WHERE scan_instance_id=?)",
+            (scan_id,)
+        )
+        dbh.dbh.execute(
+            "DELETE FROM tbl_scan_correlation_results WHERE scan_instance_id=?",
+            (scan_id,)
+        )
+        dbh.conn.commit()
+
+    # Schedule the correlation run as a background task so the HTTP
+    # response returns immediately (correlations can take several minutes
+    # for large scans).
+    background_tasks.add_task(_run_correlations, dbh, config, scan_id)
+
+    return {"scan_id": scan_id, "status": "correlation_run_started"}
+
+
 @router.get("/scans/{scan_id}/events")
 def scan_event_results(
     scan_id: str,
@@ -94,6 +137,54 @@ def scan_event_results(
         ])
 
     return retdata
+
+
+@router.get("/scans/{scan_id}/events/paged")
+def scan_event_results_paged(
+    scan_id: str,
+    eventType: str | None = None,
+    filterfp: bool = False,
+    correlationId: str | None = None,
+    search: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    user: dict = Depends(require_permission("results", "read")),
+    dbh: SpiderFootDb = Depends(get_db),
+) -> dict:
+    """Get paginated event results for a scan with optional text search."""
+    if not eventType:
+        eventType = 'ALL'
+
+    try:
+        data = dbh.scanResultEvent(scan_id, eventType, filterfp, correlationId=correlationId)
+    except Exception:
+        return {"total": 0, "data": []}
+
+    if search:
+        search_lower = search.lower()
+        data = [row for row in data if search_lower in str(row[1]).lower()]
+
+    total = len(data)
+    paged = data[offset:offset + limit]
+
+    retdata = []
+    for row in paged:
+        lastseen = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(row[0]))
+        retdata.append([
+            lastseen,
+            html.escape(row[1]),
+            html.escape(row[2]),
+            row[3],
+            row[5],
+            row[6],
+            row[7],
+            row[8],
+            row[13],
+            row[14],
+            row[4]
+        ])
+
+    return {"total": total, "data": retdata}
 
 
 @router.get("/scans/{scan_id}/events/unique")
@@ -167,6 +258,9 @@ def scan_graph(
 
     if gexf == "1":
         return SpiderFootHelpers.buildGraphGexf([root], "SpiderFoot Export", data)
+
+    if not data:
+        return {"nodes": [], "edges": []}
 
     return json.loads(SpiderFootHelpers.buildGraphJson([root], data))
 

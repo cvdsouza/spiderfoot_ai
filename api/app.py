@@ -179,7 +179,7 @@ async def lifespan(app: FastAPI):
     rabbitmq_url = os.environ.get('RABBITMQ_URL', '')
     if rabbitmq_url and rabbitmq_available():
         try:
-            consumer_manager = ResultConsumerManager(dbh, rabbitmq_url)
+            consumer_manager = ResultConsumerManager(dbh, rabbitmq_url, config=live_config)
             consumer_manager.start()
             app.state.result_consumer = consumer_manager
             log.info("Result consumer started for stateless workers")

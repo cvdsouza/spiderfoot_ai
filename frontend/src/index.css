@@ -1,27 +1,59 @@
 @import "tailwindcss";
 
+/* Use .dark class (on <html>) for dark mode, not the OS media query */
+@custom-variant dark (&:is(.dark *));
+
 :root {
-  --sf-primary: #2563eb;
-  --sf-primary-hover: #1d4ed8;
-  --sf-danger: #dc2626;
-  --sf-success: #16a34a;
-  --sf-warning: #d97706;
-  --sf-info: #0891b2;
-  --sf-bg: #ffffff;
-  --sf-bg-secondary: #f8fafc;
-  --sf-text: #0f172a;
-  --sf-text-muted: #64748b;
-  --sf-border: #e2e8f0;
-  --sf-sidebar-bg: #1e293b;
+  /* Brand */
+  --sf-primary: #4e7df4;
+  --sf-primary-hover: #3b6be0;
+  --sf-danger: #ef4444;
+  --sf-success: #22c55e;
+  --sf-warning: #f59e0b;
+  --sf-info: #06b6d4;
+
+  /* Backgrounds */
+  --sf-bg: #f0f4f9;
+  --sf-bg-secondary: #ffffff;
+  --sf-bg-card: #ffffff;
+
+  /* Text */
+  --sf-text: #0d1121;
+  --sf-text-muted: #5a6a8a;
+
+  /* Borders */
+  --sf-border: #d1d9f0;
+
+  /* Sidebar — always dark regardless of theme */
+  --sf-sidebar-bg: #1a1f36;
+  --sf-sidebar-text: #8a9bc5;
+  --sf-sidebar-text-active: #ffffff;
+  --sf-sidebar-accent: #4e7df4;
+  --sf-sidebar-group: #4a5a7a;
+  --sf-sidebar-hover: rgba(78, 125, 244, 0.12);
+  --sf-sidebar-active-bg: rgba(78, 125, 244, 0.18);
+
+  /* Backward-compat aliases used in existing components */
+  --sf-card: var(--sf-bg-card);
+  --sf-accent: var(--sf-primary);
+  --sf-text-secondary: var(--sf-text-muted);
 }
 
 .dark {
-  --sf-bg: #0f172a;
-  --sf-bg-secondary: #1e293b;
-  --sf-text: #f1f5f9;
-  --sf-text-muted: #94a3b8;
-  --sf-border: #334155;
-  --sf-sidebar-bg: #020617;
+  --sf-bg: #0d1121;
+  --sf-bg-secondary: #1a1f36;
+  --sf-bg-card: #1f2545;
+  --sf-text: #e8eaf6;
+  --sf-text-muted: #8a9bc5;
+  --sf-border: #2d3a6b;
+
+  /* Sidebar stays the same in dark mode */
+  --sf-primary-hover: #6b95f7;
+
+  /* Backward-compat aliases */
+  --sf-card: var(--sf-bg-card);
+  --sf-accent: var(--sf-primary);
+  --sf-text-secondary: var(--sf-text-muted);
 }
 
 body {

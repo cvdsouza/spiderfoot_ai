@@ -21,11 +21,122 @@ import json
 import logging
 import os
 import ssl
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 from typing import Optional
 
 log = logging.getLogger(__name__)
+
+# Root directory of the SpiderFoot application (two levels up from this file).
+_APP_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Built-in correlation rules directory (must end with / for loadCorrelationRulesRaw).
+_CORR_DIR = os.path.join(_APP_DIR, 'correlations') + os.sep
+
+
+def _run_correlations(dbh, config: dict, scan_id: str) -> None:
+    """Run correlation rules in an isolated subprocess for a completed scan.
+
+    Running in a subprocess means an OOM-kill from processing large scans
+    (40k+ events can consume several GiB) only kills the subprocess, not
+    the API server.  The subprocess creates its own DB connection and loads
+    correlation rules directly from the correlations/ directory.
+
+    Falls back to in-process execution if the subprocess cannot be launched.
+    """
+    if not config.get('__correlationrules__'):
+        log.debug(f"No correlation rules configured — skipping for scan {scan_id}")
+        return
+
+    db_path = config.get('__database', '')
+    if not db_path:
+        log.error("Cannot run correlations: __database not set in config")
+        return
+
+    # Inline script executed by the subprocess.  Uses repr() for all
+    # string literals so the values are safely embedded regardless of
+    # quotes or special characters.
+    #
+    # Rules that need source/child/entity enrichment load all matched
+    # events plus their full relationship graphs into memory — for large
+    # scans (40k+ events) this can exceed available RAM and OOM-kill the
+    # subprocess.  We therefore process one rule at a time and skip any
+    # rule whose analyze_rule_scope() reports that it needs enrichment,
+    # logging the skipped rules so the operator knows which ones require
+    # more RAM.
+    script = textwrap.dedent(f"""\
+        import sys
+        sys.path.insert(0, {repr(_APP_DIR)})
+        from spiderfoot import SpiderFootDb, SpiderFootCorrelator, SpiderFootHelpers
+        config = {{'__database': {repr(db_path)}}}
+        dbh = SpiderFootDb(config)
+        rules_raw = SpiderFootHelpers.loadCorrelationRulesRaw(
+            {repr(_CORR_DIR)}, ['template.yaml'])
+        if not rules_raw:
+            print("No correlation rules found", flush=True)
+            sys.exit(0)
+
+        completed = 0
+        skipped_heavy = 0
+        failed = 0
+        for rule_id, rule_yaml in rules_raw.items():
+            try:
+                corr = SpiderFootCorrelator(dbh, {{rule_id: rule_yaml}}, {repr(scan_id)})
+                parsed = corr.get_ruleset()
+                if not parsed:
+                    continue
+                needs_children, needs_sources, needs_entities = corr.analyze_rule_scope(parsed[0])
+                if needs_children or needs_sources or needs_entities:
+                    print(f"SKIP_HEAVY {{rule_id}}", flush=True)
+                    skipped_heavy += 1
+                    continue
+                corr.run_correlations()
+                completed += 1
+            except Exception as e:
+                print(f"RULE_ERROR {{rule_id}}: {{e}}", flush=True)
+                failed += 1
+        print(f"DONE completed={{completed}} skipped_heavy={{skipped_heavy}} failed={{failed}}", flush=True)
+    """)
+
+    try:
+        result = subprocess.run(
+            [sys.executable, '-c', script],
+            capture_output=True,
+            text=True,
+            timeout=900,  # 15-minute hard cap
+        )
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+
+        if result.returncode == 0:
+            # Log per-rule skip/error lines at appropriate levels
+            for line in stdout.splitlines():
+                if line.startswith("SKIP_HEAVY "):
+                    log.info(f"Correlation rule skipped (needs enrichment, insufficient RAM): {line[11:]}")
+                elif line.startswith("RULE_ERROR "):
+                    log.warning(f"Correlation rule error: {line[11:]}")
+                elif line.startswith("DONE "):
+                    log.info(f"Correlations done for scan {scan_id}: {line[5:]}")
+            if stderr:
+                log.warning(f"Correlation subprocess stderr for scan {scan_id}: {stderr[:500]}")
+        elif result.returncode in (-9, 137):
+            log.error(
+                f"Correlation subprocess OOM-killed for scan {scan_id}. "
+                "The scan has too many events for the available memory. "
+                "Consider running on a host with more RAM or a smaller scan."
+            )
+        else:
+            log.error(
+                f"Correlation subprocess failed for scan {scan_id} "
+                f"(exit={result.returncode}). "
+                f"stdout={stdout[:500]} stderr={stderr[:500]}"
+            )
+    except subprocess.TimeoutExpired:
+        log.error(f"Correlation subprocess timed out for scan {scan_id} after 15 minutes")
+    except Exception as e:
+        log.error(f"Failed to launch correlation subprocess for scan {scan_id}: {e}", exc_info=True)
 
 
 class ResultConsumerManager:
@@ -35,15 +146,17 @@ class ResultConsumerManager:
     ConsumerThread for each scan. Stops consumers when scans complete.
     """
 
-    def __init__(self, dbh, rabbitmq_url: str):
+    def __init__(self, dbh, rabbitmq_url: str, config: dict = None):
         """Initialize the result consumer manager.
 
         Args:
             dbh: Database handle (SpiderFootDb instance)
             rabbitmq_url: RabbitMQ connection URL
+            config: SpiderFoot config dict (must include __correlationrules__)
         """
         self.dbh = dbh
         self.rabbitmq_url = rabbitmq_url
+        self.config = config or {}
         self.rabbitmq_ca_cert = os.environ.get('RABBITMQ_CA_CERT', '/etc/rabbitmq/certs/ca.crt')
         self.exchange_name = 'scan.results'
 
@@ -196,7 +309,8 @@ class ResultConsumerManager:
                             dbh=self.dbh,
                             rabbitmq_url=self.rabbitmq_url,
                             rabbitmq_ca_cert=self.rabbitmq_ca_cert,
-                            exchange_name=self.exchange_name
+                            exchange_name=self.exchange_name,
+                            config=self.config,
                         )
                         consumer.start()
                         self.consumers[scan_id] = consumer
@@ -221,14 +335,17 @@ class ResultConsumerManager:
                         log.warning(
                             f"Scan {scan_id} consumer has been idle for {idle_secs:.0f}s "
                             f"(>{self.STALE_CONSUMER_TIMEOUT}s threshold) — "
-                            f"FINISHED message likely dropped; marking scan as FINISHED"
+                            f"FINISHED message likely dropped; running correlations and marking FINISHED"
                         )
-                        try:
-                            self.dbh.scanInstanceSet(scan_id, status='FINISHED', ended=int(now))
-                        except Exception as e:
-                            log.error(f"Failed to mark stale scan {scan_id} as FINISHED: {e}")
                         consumer.stop()
                         self.consumers.pop(scan_id)
+                        # Run correlations before marking complete — same as the
+                        # normal FINISHED lifecycle path in ConsumerThread.
+                        _run_correlations(self.dbh, self.config, scan_id)
+                        try:
+                            self.dbh.scanInstanceSet(scan_id, status='FINISHED', ended=int(now * 1000))
+                        except Exception as e:
+                            log.error(f"Failed to mark stale scan {scan_id} as FINISHED: {e}")
 
                 # ── Step 5: cleanup offline workers every 2 minutes ──────
                 current_time = time.time()
@@ -251,9 +368,13 @@ class ResultConsumerManager:
             list: List of scan IDs in RUNNING state
         """
         try:
-            # Use direct database access since we need to filter by status
+            # Include ABORT-REQUESTED: the scan is still active and its worker
+            # may still publish a lifecycle message (ABORTED/FAILED) that the
+            # ConsumerThread must receive to update the final status.
             with self.dbh.dbhLock:
-                self.dbh.dbh.execute("SELECT guid FROM tbl_scan_instance WHERE status = 'RUNNING'")
+                self.dbh.dbh.execute(
+                    "SELECT guid FROM tbl_scan_instance WHERE status IN ('RUNNING', 'ABORT-REQUESTED')"
+                )
                 result = self.dbh.dbh.fetchall()
                 return [row[0] for row in result]
         except Exception as e:
@@ -287,7 +408,7 @@ class ConsumerThread(threading.Thread):
     the database. Stops when FINISHED/FAILED lifecycle message is received.
     """
 
-    def __init__(self, scan_id: str, dbh, rabbitmq_url: str, rabbitmq_ca_cert: str, exchange_name: str):
+    def __init__(self, scan_id: str, dbh, rabbitmq_url: str, rabbitmq_ca_cert: str, exchange_name: str, config: dict = None):
         """Initialize the consumer thread.
 
         Args:
@@ -296,6 +417,7 @@ class ConsumerThread(threading.Thread):
             rabbitmq_url: RabbitMQ connection URL
             rabbitmq_ca_cert: Path to CA certificate for TLS
             exchange_name: Exchange name to bind queue to
+            config: SpiderFoot config dict (used to run correlation rules on FINISHED)
         """
         super().__init__(name=f"ResultConsumer-{scan_id}", daemon=True)
 
@@ -305,6 +427,7 @@ class ConsumerThread(threading.Thread):
         self.rabbitmq_ca_cert = rabbitmq_ca_cert
         self.exchange_name = exchange_name
         self.queue_name = f"scan.results.{scan_id}"
+        self.config = config or {}
 
         self.connection = None
         self.channel = None
@@ -460,14 +583,20 @@ class ConsumerThread(threading.Thread):
                 log.info(f"Received lifecycle {lifecycle} for scan {scan_id}")
                 self.lifecycle_received = True
                 if lifecycle == 'FINISHED':
-                    self.dbh.scanInstanceSet(scan_id, status='FINISHED', ended=int(time.time()))
+                    # Run correlations before marking complete.  In stateless
+                    # worker mode sfp__stor_db is removed from the modlist so
+                    # the worker's local DB is empty; all events are in the API
+                    # DB by the time we reach here, so we run correlations here
+                    # on the server side instead.
+                    self._run_correlations(scan_id)
+                    self.dbh.scanInstanceSet(scan_id, status='FINISHED', ended=int(time.time() * 1000))
                     # Stop consuming after FINISHED
                     self.stop()
                 elif lifecycle == 'FAILED':
-                    self.dbh.scanInstanceSet(scan_id, status='ERROR-FAILED', ended=int(time.time()))
+                    self.dbh.scanInstanceSet(scan_id, status='ERROR-FAILED', ended=int(time.time() * 1000))
                     self.stop()
                 elif lifecycle == 'ABORTED':
-                    self.dbh.scanInstanceSet(scan_id, status='ABORTED', ended=int(time.time()))
+                    self.dbh.scanInstanceSet(scan_id, status='ABORTED', ended=int(time.time() * 1000))
                     self.stop()
 
                 channel.basic_ack(delivery_tag=method.delivery_tag)
@@ -515,9 +644,21 @@ class ConsumerThread(threading.Thread):
                 if 'source_event_hash' in event_data:
                     sfEvent._sourceEventHash = event_data['source_event_hash']
 
-                # Store event to database
-                self.dbh.scanEventStore(scan_id, sfEvent)
-                log.debug(f"Stored event {event_type} for scan {scan_id}")
+                # Idempotent insert: skip if this exact hash already exists.
+                # Duplicate hashes arise from at-least-once RabbitMQ delivery
+                # (nack → requeue → redeliver) or scan task redelivery.
+                with self.dbh.dbhLock:
+                    self.dbh.dbh.execute(
+                        "SELECT 1 FROM tbl_scan_results WHERE scan_instance_id=? AND hash=? LIMIT 1",
+                        (scan_id, sfEvent.hash)
+                    )
+                    already_stored = self.dbh.dbh.fetchone() is not None
+
+                if already_stored:
+                    log.debug(f"Skipping duplicate event {event_type} (hash={sfEvent.hash}) for scan {scan_id}")
+                else:
+                    self.dbh.scanEventStore(scan_id, sfEvent)
+                    log.debug(f"Stored event {event_type} for scan {scan_id}")
 
             channel.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -528,6 +669,10 @@ class ConsumerThread(threading.Thread):
             log.error(f"Error handling message for scan {self.scan_id}: {e}")
             # Retry transient errors
             channel.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+
+    def _run_correlations(self, scan_id: str) -> None:
+        """Run correlation rules — delegates to module-level helper."""
+        _run_correlations(self.dbh, self.config, scan_id)
 
     def stop(self):
         """Stop the consumer thread."""

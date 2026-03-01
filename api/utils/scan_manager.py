@@ -146,7 +146,7 @@ async def launch_scan(
         dbh = SpiderFootDb(config)
         try:
             dbh.scanInstanceCreate(scan_id, scan_name, scan_target)
-            dbh.scanInstanceSet(scan_id, started=time.time(), status='RUNNING')
+            dbh.scanInstanceSet(scan_id, started=time.time() * 1000, status='RUNNING')
         except Exception as e:
             log.error(f"Scan [{scan_id}] failed to create database record: {e}")
             return ("ERROR", f"Failed to create scan: {e}")

@@ -3,6 +3,18 @@ import api from './client';
 export const getScanEvents = (id: string, eventType?: string, filterfp: boolean = false, correlationId?: string) =>
   api.get(`/scans/${id}/events`, { params: { eventType, filterfp, correlationId } });
 
+export const getScanEventsPaged = (
+  id: string,
+  eventType?: string,
+  filterfp: boolean = false,
+  search?: string,
+  limit: number = 100,
+  offset: number = 0,
+) =>
+  api.get(`/scans/${id}/events/paged`, {
+    params: { eventType, filterfp, search: search || undefined, limit, offset },
+  });
+
 export const getScanEventsUnique = (id: string, eventType: string, filterfp: boolean = false) =>
   api.get(`/scans/${id}/events/unique`, { params: { eventType, filterfp } });
 
