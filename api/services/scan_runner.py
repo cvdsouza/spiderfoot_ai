@@ -390,8 +390,8 @@ def run_scan_task(task: dict) -> None:
         # correct lifecycle so the ConsumerThread can update the API DB.
         if os.path.exists(scan_db_path):
             try:
-                _chk = _SpiderFootDb({'__database': scan_db_path, '__modules__': {},
-                                      '__correlationrules__': []})
+                _chk = SpiderFootDb({'__database': scan_db_path, '__modules__': {},
+                                     '__correlationrules__': []})
                 row = _chk.scanInstanceGet(scan_id)
                 final_status = row[5] if row else None
                 if final_status == 'ABORTED':
