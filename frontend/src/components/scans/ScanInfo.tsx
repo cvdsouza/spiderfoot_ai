@@ -36,17 +36,19 @@ export default function ScanInfo() {
     setActiveTab('correlations');
   };
 
+  const scanId = id ?? '';
+
   const stopMutation = useMutation({
-    mutationFn: () => stopScan(id!),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scanStatus', id] }),
+    mutationFn: () => stopScan(scanId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scanStatus', scanId] }),
   });
 
-  const { data: statusData } = useScanStatus(id!);
+  const { data: statusData } = useScanStatus(scanId);
 
   const { data: summaryData = [] } = useQuery({
-    queryKey: ['scanSummary', id],
+    queryKey: ['scanSummary', scanId],
     queryFn: async () => {
-      const { data } = await getScanSummary(id!);
+      const { data } = await getScanSummary(scanId);
       return data;
     },
     enabled: !!id,
@@ -54,16 +56,16 @@ export default function ScanInfo() {
   });
 
   const { data: correlations = [] } = useQuery({
-    queryKey: ['scanCorrelations', id],
+    queryKey: ['scanCorrelations', scanId],
     queryFn: async () => {
-      const { data } = await getScanCorrelations(id!);
+      const { data } = await getScanCorrelations(scanId);
       return data;
     },
     enabled: !!id && activeTab === 'correlations',
     refetchInterval: activeTab === 'correlations' && statusData?.[5] === 'RUNNING' ? 5000 : false,
   });
 
-  if (!statusData) {
+  if (!id || !statusData) {
     return (
       <div className="flex items-center justify-center py-12">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--sf-primary)] border-t-transparent" />
@@ -256,7 +258,7 @@ export default function ScanInfo() {
                 {(correlations as ApiRow[])
                   .filter((row: ApiRow) => !riskFilter || row[3] === riskFilter)
                   .map((row: ApiRow, idx: number) => (
-                    <CorrelationCard key={String(row[0]) || String(idx)} scanId={id!} correlation={row} />
+                    <CorrelationCard key={String(row[0]) || String(idx)} scanId={id} correlation={row} />
                   ))}
               </div>
             )}
@@ -265,7 +267,7 @@ export default function ScanInfo() {
 
         {activeTab === 'browse' && (
           <EventBrowser
-            scanId={id!}
+            scanId={id}
             isRunning={status === 'RUNNING'}
             initialEventType={browseEventType}
             eventTypes={(summaryData as ApiRow[]).map((row: ApiRow) => String(row[0])).sort()}
@@ -273,19 +275,19 @@ export default function ScanInfo() {
         )}
 
         {activeTab === 'graph' && (
-          <GraphView scanId={id!} />
+          <GraphView scanId={id} />
         )}
 
         {activeTab === 'log' && (
-          <ScanLog scanId={id!} isRunning={status === 'RUNNING'} />
+          <ScanLog scanId={id} isRunning={status === 'RUNNING'} />
         )}
 
         {activeTab === 'ai-insights' && (
-          <AiInsights scanId={id!} scanStatus={status} />
+          <AiInsights scanId={id} scanStatus={status} />
         )}
 
         {activeTab === 'config' && (
-          <ScanConfig scanId={id!} />
+          <ScanConfig scanId={id} />
         )}
       </div>
     </div>
