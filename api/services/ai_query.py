@@ -6,6 +6,7 @@ into SpiderFootDb queries and return conversational answers.
 
 import json
 import logging
+import re
 
 import requests as http_requests
 
@@ -161,7 +162,6 @@ def _tools_for_anthropic() -> list:
 # ── Data Sanitization ─────────────────────────────────────────────────
 
 # Patterns commonly used in prompt injection attacks embedded in data
-import re
 
 _INJECTION_PATTERNS = re.compile(
     r'(?:ignore\s+(?:all\s+)?(?:previous|above|prior)\s+instructions?'
@@ -435,8 +435,8 @@ def _run_openai_tool_loop(api_key: str, model: str,
 # ── Anthropic Tool-Calling Loop ──────────────────────────────────────
 
 def _run_anthropic_tool_loop(api_key: str, model: str,
-                              messages: list, dbh: SpiderFootDb,
-                              scan_id: str, max_iterations: int = 5) -> dict:
+                             messages: list, dbh: SpiderFootDb,
+                             scan_id: str, max_iterations: int = 5) -> dict:
     """Run the Anthropic tool-calling conversation loop."""
     tools = _tools_for_anthropic()
     total_tokens = 0

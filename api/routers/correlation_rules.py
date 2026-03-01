@@ -316,7 +316,7 @@ def _validate_yaml(yaml_content: str, config: dict, dbh: SpiderFootDb) -> dict:
 
     # Try to instantiate a correlator with just this rule
     try:
-        correlator = SpiderFootCorrelator(dbh, {rule_id: yaml_content})
+        SpiderFootCorrelator(dbh, {rule_id: yaml_content})
         # If no exception, the rule is valid
         return {'valid': True, 'error': None}
     except SyntaxError as e:

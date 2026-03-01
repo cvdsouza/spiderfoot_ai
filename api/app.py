@@ -18,7 +18,6 @@ from api.services.result_consumer import ResultConsumerManager
 from api.services.task_publisher import rabbitmq_available
 from sflib import SpiderFoot
 from spiderfoot import SpiderFootCorrelator, SpiderFootDb, SpiderFootHelpers, __version__
-from spiderfoot.logger import logListenerSetup, logWorkerSetup
 
 log = logging.getLogger(f"spiderfoot.{__name__}")
 

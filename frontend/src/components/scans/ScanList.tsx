@@ -95,8 +95,9 @@ export default function ScanList() {
       queryClient.invalidateQueries({ queryKey: ['scans'] });
       const label = action === 'stop' ? 'stopped' : action === 'delete' ? 'deleted' : 're-run started for';
       toast.success(`${ids.length} scan${ids.length !== 1 ? 's' : ''} ${label}.`);
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.detail || `Failed to ${action} scans`);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+      setErrorMsg(detail || `Failed to ${action} scans`);
     } finally {
       setPendingAction(null);
     }
@@ -110,8 +111,9 @@ export default function ScanList() {
       else await rerunScan(id);
       queryClient.invalidateQueries({ queryKey: ['scans'] });
       toast.success(action === 'stop' ? 'Scan stop requested.' : 'Scan re-run started.');
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.detail || `Failed to ${action} scan`);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+      setErrorMsg(detail || `Failed to ${action} scan`);
     }
   };
 
@@ -122,8 +124,9 @@ export default function ScanList() {
       await deleteScan(id);
       queryClient.invalidateQueries({ queryKey: ['scans'] });
       toast.success('Scan deleted.');
-    } catch (err: any) {
-      setErrorMsg(err.response?.data?.detail || 'Failed to delete scan');
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+      setErrorMsg(detail || 'Failed to delete scan');
     }
   };
 

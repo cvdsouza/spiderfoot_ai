@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getScanEventsPaged, getScanEventsUnique } from '../../api/results';
+
+type ApiRow = Array<string | number | boolean | null>;
 
 const PAGE_SIZE = 100;
 
@@ -25,14 +27,13 @@ export default function EventBrowser({
   const [page, setPage] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Reset to page 0 whenever filters change
-  useEffect(() => { setPage(0); }, [eventType, filterFp, searchQuery]);
-
   // Sync when parent changes the initial event type (e.g. clicking from Summary tab)
-  useEffect(() => {
+  const [prevInitialEventType, setPrevInitialEventType] = useState(initialEventType);
+  if (initialEventType !== prevInitialEventType) {
+    setPrevInitialEventType(initialEventType);
     setEventType(initialEventType);
     setPage(0);
-  }, [initialEventType]);
+  }
 
   const { data: pagedResult, isLoading } = useQuery({
     queryKey: ['scanEventsPaged', scanId, eventType, filterFp, searchQuery, page],
@@ -40,7 +41,7 @@ export default function EventBrowser({
       const { data } = await getScanEventsPaged(
         scanId, eventType, filterFp, searchQuery || undefined, PAGE_SIZE, page * PAGE_SIZE,
       );
-      return data as { total: number; data: any[][] };
+      return data as { total: number; data: ApiRow[] };
     },
     enabled: viewMode === 'all',
     refetchInterval: isRunning ? 10000 : false,
@@ -50,7 +51,7 @@ export default function EventBrowser({
     queryKey: ['scanEventsUnique', scanId, eventType, filterFp],
     queryFn: async () => {
       const { data } = await getScanEventsUnique(scanId, eventType, filterFp);
-      return data;
+      return data as ApiRow[];
     },
     enabled: viewMode === 'unique' && eventType !== 'ALL',
   });
@@ -75,7 +76,7 @@ export default function EventBrowser({
           <label className="text-sm font-medium text-[var(--sf-text)]">Type:</label>
           <select
             value={eventType}
-            onChange={(e) => setEventType(e.target.value)}
+            onChange={(e) => { setEventType(e.target.value); setPage(0); }}
             className="rounded-md border border-[var(--sf-border)] bg-[var(--sf-bg)] px-2 py-1.5 text-sm"
           >
             <option value="ALL">All Types</option>
@@ -122,7 +123,7 @@ export default function EventBrowser({
           <input
             type="checkbox"
             checked={filterFp}
-            onChange={(e) => setFilterFp(e.target.checked)}
+            onChange={(e) => { setFilterFp(e.target.checked); setPage(0); }}
             className="rounded"
           />
           Hide False Positives
@@ -190,7 +191,7 @@ export default function EventBrowser({
                     </td>
                   </tr>
                 ) : (
-                  events.map((row: any[], idx: number) => (
+                  events.map((row: ApiRow, idx: number) => (
                     <tr key={idx} className="border-b border-[var(--sf-border)] hover:bg-[var(--sf-bg-secondary)]">
                       <td className="whitespace-nowrap px-3 py-2 text-xs text-[var(--sf-text-muted)]">{row[0]}</td>
                       <td className="max-w-md truncate px-3 py-2 font-mono text-xs">{row[1]}</td>
@@ -249,7 +250,7 @@ export default function EventBrowser({
                   </td>
                 </tr>
               ) : (
-                uniqueEvents.map((row: any[], idx: number) => (
+                uniqueEvents.map((row: ApiRow, idx: number) => (
                   <tr key={idx} className="border-b border-[var(--sf-border)] hover:bg-[var(--sf-bg-secondary)]">
                     <td className="max-w-lg truncate px-3 py-2 font-mono text-xs">{row[0]}</td>
                     <td className="px-3 py-2 text-xs">{row[1]}</td>

@@ -17,6 +17,7 @@ Started automatically when API server starts (if RABBITMQ_URL configured).
 Shuts down gracefully when API server stops.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -538,10 +539,8 @@ class ConsumerThread(threading.Thread):
 
             # Close connection
             if self.connection and not self.connection.is_closed:
-                try:
+                with contextlib.suppress(Exception):
                     self.connection.close()
-                except Exception:
-                    pass
 
             log.info(f"Consumer thread stopped for scan {self.scan_id}")
 
@@ -678,7 +677,5 @@ class ConsumerThread(threading.Thread):
         """Stop the consumer thread."""
         self.stop_event.set()
         if self.channel and self.channel.is_open:
-            try:
+            with contextlib.suppress(Exception):
                 self.channel.stop_consuming()
-            except Exception:
-                pass

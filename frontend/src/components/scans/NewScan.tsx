@@ -64,8 +64,9 @@ export default function NewScan() {
       } else {
         setError(data[1] || 'Failed to start scan');
       }
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to start scan');
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
+      setError(detail || 'Failed to start scan');
     } finally {
       setIsSubmitting(false);
     }

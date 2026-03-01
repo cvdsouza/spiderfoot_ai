@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getCorrelationRule,
@@ -56,12 +56,12 @@ export default function RuleEditor({ ruleId, mode, onClose }: RuleEditorProps) {
     enabled: !!ruleId,
   });
 
-  // Set yaml content when rule data loads
-  useEffect(() => {
-    if (ruleData?.yaml_content) {
-      setYaml(ruleData.yaml_content);
-    }
-  }, [ruleData]);
+  // Initialize yaml when rule data loads (derived state from server response)
+  const [prevRuleData, setPrevRuleData] = useState(ruleData);
+  if (ruleData !== prevRuleData) {
+    setPrevRuleData(ruleData);
+    if (ruleData?.yaml_content) setYaml(ruleData.yaml_content);
+  }
 
   const validateMutation = useMutation({
     mutationFn: () => validateCorrelationRule(yaml),

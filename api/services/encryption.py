@@ -4,6 +4,7 @@ Stores a persistent encryption key at ~/.spiderfoot/secret.key so that
 API keys encrypted in the database can be decrypted across process restarts.
 """
 
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -30,10 +31,8 @@ def _get_or_create_secret_key() -> bytes:
     key = Fernet.generate_key()
     key_file.write_bytes(key)
 
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(str(key_file), 0o600)
-    except OSError:
-        pass  # Windows doesn't support chmod the same way
 
     log.info("Generated new encryption key for AI API key storage")
     return key

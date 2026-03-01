@@ -7,6 +7,7 @@ Provides:
 - require_permission(resource, action) dependency factory (raises 403)
 """
 
+import contextlib
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -46,10 +47,8 @@ def _get_or_create_jwt_key() -> str:
     key = os.urandom(32).hex()
     key_file.write_text(key)
 
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(str(key_file), 0o600)
-    except OSError:
-        pass  # Windows
 
     log.info("Generated new persistent JWT signing key")
     return key

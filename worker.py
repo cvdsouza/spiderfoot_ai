@@ -30,6 +30,7 @@ Environment variables
 """
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -40,6 +41,8 @@ import sys
 import threading
 import time
 import uuid
+
+import pika
 
 log = logging.getLogger("sf.worker")
 
@@ -70,8 +73,6 @@ def _ssl_options():
     """
     if not RABBITMQ_URL.startswith('amqps://'):
         return None
-
-    import pika  # noqa: PLC0415
 
     ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
     ctx.check_hostname = False
@@ -138,7 +139,7 @@ def _heartbeat_thread(queue_type: str, current_scan_ref: list) -> None:
         _shutdown.wait(timeout=15)
 
     # Final offline heartbeat
-    try:
+    with contextlib.suppress(Exception):
         requests.post(
             heartbeat_url,
             json={
@@ -151,8 +152,6 @@ def _heartbeat_thread(queue_type: str, current_scan_ref: list) -> None:
             },
             timeout=5,
         )
-    except Exception:
-        pass
 
 
 # ── Message handler ────────────────────────────────────────────────────────────
@@ -212,7 +211,6 @@ def _make_handler(current_scan_ref: list):
 
 def _connect_with_retry(max_retries: int = 10, delay: float = 5.0):
     """Return a pika BlockingConnection, retrying on failure."""
-    import pika  # noqa: PLC0415
 
     ssl_opts = _ssl_options()
 
@@ -287,8 +285,6 @@ def main() -> None:
     )
     hb.start()
 
-    import pika  # noqa: PLC0415
-
     conn = _connect_with_retry()
     channel = conn.channel()
 
@@ -312,10 +308,8 @@ def main() -> None:
     except Exception as exc:
         log.error("Consumer loop error: %s", exc)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             conn.close()
-        except Exception:
-            pass
 
     log.info("Worker %s stopped", WORKER_NAME)
 

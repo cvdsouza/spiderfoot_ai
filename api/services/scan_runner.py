@@ -18,6 +18,7 @@ Task dict schema:
     }
 """
 
+import contextlib
 import json
 import logging
 import logging.handlers
@@ -131,15 +132,13 @@ class _RabbitMQLogHandler(logging.Handler):
 
     def close(self) -> None:
         if self._conn and not self._conn.is_closed:
-            try:
+            with contextlib.suppress(Exception):
                 self._conn.close()
-            except Exception:
-                pass
         super().close()
 
 
 def _abort_bridge(scan_id: str, api_db_path: str, scan_db_path: str,
-                   stop_event: threading.Event) -> None:
+                  stop_event: threading.Event) -> None:
     """Mirror ABORT-REQUESTED from the API DB to the per-scan DB.
 
     The SpiderFoot scanner polls its own per-scan DB for the abort flag
@@ -406,10 +405,8 @@ def run_scan_task(task: dict) -> None:
 
         # Remove the per-scan DB — all results were forwarded via RabbitMQ,
         # so the local file has no further value.
-        try:
+        with contextlib.suppress(OSError):
             if os.path.exists(scan_db_path):
                 os.unlink(scan_db_path)
-        except OSError:
-            pass
 
     log.info("[worker] Scan %s completed", scan_id)

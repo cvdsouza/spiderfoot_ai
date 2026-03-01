@@ -1,7 +1,7 @@
 """Distributed worker registry API routes (Phase 11)."""
 
+import contextlib
 import logging
-import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -62,10 +62,8 @@ def list_workers(
 ) -> list[WorkerResponse]:
     """List all registered workers.  Requires settings:read permission."""
     # Mark stale workers as offline before returning
-    try:
+    with contextlib.suppress(Exception):
         dbh.workerOfflineStale(max_age_seconds=60)
-    except Exception:
-        pass
     rows = dbh.workerList()
     return [_row_to_response(r) for r in rows]
 
