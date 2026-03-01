@@ -211,7 +211,6 @@ def _make_handler(current_scan_ref: list):
 
 def _connect_with_retry(max_retries: int = 10, delay: float = 5.0):
     """Return a pika BlockingConnection, retrying on failure."""
-
     ssl_opts = _ssl_options()
 
     for attempt in range(1, max_retries + 1):
