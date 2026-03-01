@@ -239,6 +239,119 @@ def _publish_lifecycle(scan_id: str, lifecycle: str, rabbitmq_url: str) -> None:
         log.error("[worker] Failed to publish %s lifecycle for scan %s: %s", lifecycle, scan_id, e)
 
 
+def _build_task_config(task: dict, SpiderFoot, SpiderFootDb, SpiderFootHelpers,
+                       data_path: str) -> tuple:
+    """Build scanner config and per-scan DB path, removing any stale per-scan DB.
+
+    Returns:
+        tuple: (sf_cfg, scan_db_path, db_path)
+    """
+    scan_id = task.get('scan_id', '<unknown>')
+    db_path = os.path.join(data_path, 'spiderfoot.db')
+    scan_db_path = os.path.join(data_path, f'spiderfoot_{scan_id}.db')
+
+    if os.path.exists(scan_db_path):
+        try:
+            os.unlink(scan_db_path)
+            log.info("[worker] Removed stale scan DB for %s (task redelivery)", scan_id)
+        except OSError as e:
+            log.warning("[worker] Could not remove stale scan DB for %s: %s", scan_id, e)
+
+    default_config = {
+        '_debug': False,
+        '_maxthreads': 3,
+        '__logging': True,
+        '__outputfilter': None,
+        '_useragent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:62.0) Gecko/20100101 Firefox/62.0',
+        '_dnsserver': '',
+        '_fetchtimeout': 5,
+        '_internettlds': 'https://publicsuffix.org/list/effective_tld_names.dat',
+        '_internettlds_cache': 72,
+        '_genericusers': ",".join(SpiderFootHelpers.usernamesFromWordlists(['generic-usernames'])),
+        '__database': db_path,
+        '__modules__': {},
+        '__correlationrules__': [],
+        '_socks1type': '',
+        '_socks2addr': '',
+        '_socks3port': '',
+        '_socks4user': '',
+        '_socks5pwd': '',
+    }
+
+    dbh = SpiderFootDb(default_config)
+    db_cfg = dbh.configGet()
+    if db_cfg:
+        sf_cfg = SpiderFoot(default_config).configUnserialize(db_cfg, default_config)
+    else:
+        sf_cfg = default_config.copy()
+
+    sf_cfg['__database'] = scan_db_path
+
+    mod_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        'modules'
+    )
+    sf_cfg['__modules__'] = SpiderFootHelpers.loadModulesAsDict(mod_dir, [
+        'sfp_template.py',
+        'sfp_threatcrowd.py',
+        'sfp_phishstats.py',
+    ])
+
+    return sf_cfg, scan_db_path, db_path
+
+
+def _start_log_forwarding(scan_id: str, rabbitmq_url: str) -> tuple:
+    """Set up RabbitMQ log forwarding for a scan.
+
+    Returns:
+        tuple: (logging_queue, listener, rmq_log_handler) — listener and
+            handler are None when rabbitmq_url is empty.
+    """
+    import queue as _queue  # noqa: PLC0415
+    logging_queue = _queue.Queue()
+    listener = None
+    rmq_log_handler = None
+    if rabbitmq_url:
+        rmq_log_handler = _RabbitMQLogHandler(scan_id, rabbitmq_url)
+        listener = logging.handlers.QueueListener(
+            logging_queue,
+            rmq_log_handler,
+            respect_handler_level=True,
+        )
+        listener.start()
+    return logging_queue, listener, rmq_log_handler
+
+
+def _handle_scan_completion(scan_id: str, scan_db_path: str, SpiderFootDb,
+                            rabbitmq_url: str, listener, rmq_log_handler) -> None:
+    """Tear down log forwarding and publish terminal lifecycle if needed.
+
+    Called from run_scan_task()'s finally block to stop the log listener and
+    check whether ABORTED or FAILED must be published to RabbitMQ.
+    """
+    if listener:
+        listener.stop()
+    if rmq_log_handler:
+        rmq_log_handler.close()
+
+    if os.path.exists(scan_db_path):
+        try:
+            _chk = SpiderFootDb({'__database': scan_db_path, '__modules__': {},
+                                 '__correlationrules__': []})
+            row = _chk.scanInstanceGet(scan_id)
+            final_status = row[5] if row else None
+            if final_status == 'ABORTED':
+                _publish_lifecycle(scan_id, 'ABORTED', rabbitmq_url)
+            elif final_status == 'ERROR-FAILED':
+                _publish_lifecycle(scan_id, 'FAILED', rabbitmq_url)
+        except Exception as e:
+            log.error("[worker] Could not read final scan status from per-scan DB: %s", e)
+
+    with contextlib.suppress(OSError):
+        if os.path.exists(scan_db_path):
+            os.unlink(scan_db_path)
+
+
 def run_scan_task(task: dict) -> None:
     """Execute a scan described by *task*.
 
@@ -257,111 +370,22 @@ def run_scan_task(task: dict) -> None:
     target_type = task.get('target_type', '')
     module_list_str = task.get('module_list', '')
 
-    log.info("[worker] Starting scan %s — target=%s modules=%s",
+    log.info("[worker] Starting scan %s \u2014 target=%s modules=%s",
              scan_id, scan_target, module_list_str)
 
-    # ── Imports (heavy — done once per task) ──────────────────────────
+    # \u2500\u2500 Imports (heavy \u2014 done once per task) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     from sflib import SpiderFoot  # noqa: PLC0415
     from sfscan import startSpiderFootScanner  # noqa: PLC0415
     from spiderfoot import SpiderFootDb, SpiderFootHelpers  # noqa: PLC0415
 
-    # ── Load config from DB ────────────────────────────────────────────
-    # The data path is taken from the environment; workers must have the
-    # same data path as the API server (shared volume in Docker).
     data_path = os.environ.get('SPIDERFOOT_DATA', '/var/lib/spiderfoot')
-    db_path = os.path.join(data_path, 'spiderfoot.db')
-
-    # Per-scan DB: isolated from the shared spiderfoot.db so that a task
-    # redelivered after a worker crash (RabbitMQ requeues unacked messages)
-    # doesn't fail with "Unable to create scan instance in database" because
-    # sfscan.py's scanInstanceCreate() does a plain INSERT that raises on
-    # duplicate scan IDs.  Results still go to the API via RabbitMQ — this
-    # local DB is only used for sfscan.py's internal bookkeeping.
-    scan_db_path = os.path.join(data_path, f'spiderfoot_{scan_id}.db')
-
-    # Remove any leftover from a previous attempt at this task (redelivery case)
-    if os.path.exists(scan_db_path):
-        try:
-            os.unlink(scan_db_path)
-            log.info("[worker] Removed stale scan DB for %s (task redelivery)", scan_id)
-        except OSError as e:
-            log.warning("[worker] Could not remove stale scan DB for %s: %s", scan_id, e)
-
-    # Build default config (same as sf.py) to provide fallback values
-    default_config = {
-        '_debug': False,
-        '_maxthreads': 3,
-        '__logging': True,
-        '__outputfilter': None,
-        '_useragent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:62.0) Gecko/20100101 Firefox/62.0',
-        '_dnsserver': '',
-        '_fetchtimeout': 5,
-        '_internettlds': 'https://publicsuffix.org/list/effective_tld_names.dat',
-        '_internettlds_cache': 72,
-        '_genericusers': ",".join(SpiderFootHelpers.usernamesFromWordlists(['generic-usernames'])),
-        '__database': db_path,
-        '__modules__': {},  # Will be populated below
-        '__correlationrules__': [],  # Empty list, not None - prevents len() errors
-        '_socks1type': '',
-        '_socks2addr': '',
-        '_socks3port': '',
-        '_socks4user': '',
-        '_socks5pwd': '',
-    }
-
-    dbh = SpiderFootDb(default_config)
-
-    # Load saved configuration from DB, merging with defaults
-    db_cfg = dbh.configGet()
-    if db_cfg:
-        sf_cfg = SpiderFoot(default_config).configUnserialize(db_cfg, default_config)
-    else:
-        sf_cfg = default_config.copy()
-
-    # Point the scanner at the per-scan DB, not the shared one
-    sf_cfg['__database'] = scan_db_path
-
-    # Load module metadata as a dict (same as API server does)
-    # The modules directory is at the root of the project, not in the api directory
-    # __file__ is /home/spiderfoot/api/services/scan_runner.py
-    # We need to go up three levels to get to /home/spiderfoot
-    mod_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        'modules'
+    sf_cfg, scan_db_path, db_path = _build_task_config(
+        task, SpiderFoot, SpiderFootDb, SpiderFootHelpers, data_path,
     )
-    sf_cfg['__modules__'] = SpiderFootHelpers.loadModulesAsDict(mod_dir, [
-        'sfp_template.py',
-        'sfp_threatcrowd.py',   # Service defunct
-        'sfp_phishstats.py',    # Service unreliable
-    ])
-
     modlist = [m.strip() for m in module_list_str.split(',') if m.strip()]
 
-    # ── Run the scan in-process ────────────────────────────────────────
-    # startSpiderFootScanner is normally called in a subprocess via
-    # mp.Process; here the worker *is* the subprocess, so we call it
-    # directly.  This matches the existing function signature.
-    import queue as _queue
-    logging_queue = _queue.Queue()
-
-    # Route worker log entries back to the API via RabbitMQ so they appear
-    # in the scan log tab in real-time.  Without this, logWorkerSetup()
-    # adds a QueueHandler but no QueueListener ever drains logging_queue —
-    # every record is silently discarded and the UI shows "No log entries".
-    rabbitmq_url = os.environ.get('RABBITMQ_URL', '')
-    listener = None
-    rmq_log_handler = None
-    if rabbitmq_url:
-        rmq_log_handler = _RabbitMQLogHandler(scan_id, rabbitmq_url)
-        listener = logging.handlers.QueueListener(
-            logging_queue,
-            rmq_log_handler,
-            respect_handler_level=True,
-        )
-        listener.start()
-
-    # Start the abort bridge: polls the shared API DB every 3 s and
-    # propagates ABORT-REQUESTED to the per-scan DB so sfscan.py detects it.
+    # Start abort bridge: polls shared API DB and propagates ABORT-REQUESTED
+    # to the per-scan DB so sfscan.py detects it.
     abort_stop = threading.Event()
     abort_thread = threading.Thread(
         target=_abort_bridge,
@@ -371,6 +395,9 @@ def run_scan_task(task: dict) -> None:
     )
     abort_thread.start()
 
+    rabbitmq_url = os.environ.get('RABBITMQ_URL', '')
+    logging_queue, listener, rmq_log_handler = _start_log_forwarding(scan_id, rabbitmq_url)
+
     try:
         startSpiderFootScanner(logging_queue, scan_name, scan_id,
                                scan_target, target_type, modlist, sf_cfg)
@@ -378,34 +405,9 @@ def run_scan_task(task: dict) -> None:
         log.error("[worker] Scan %s raised an exception: %s", scan_id, exc)
         raise
     finally:
-        abort_stop.set()  # Tell the abort bridge to exit
-        if listener:
-            listener.stop()
-        if rmq_log_handler:
-            rmq_log_handler.close()
-
-        # For abort/error cases, sfp__stor_rabbitmq.finished() is never called
-        # (modules only receive 'FINISHED' during normal waitForThreads() completion).
-        # Check the per-scan DB for the actual terminal status and publish the
-        # correct lifecycle so the ConsumerThread can update the API DB.
-        if os.path.exists(scan_db_path):
-            try:
-                _chk = SpiderFootDb({'__database': scan_db_path, '__modules__': {},
-                                     '__correlationrules__': []})
-                row = _chk.scanInstanceGet(scan_id)
-                final_status = row[5] if row else None
-                if final_status == 'ABORTED':
-                    _publish_lifecycle(scan_id, 'ABORTED', rabbitmq_url)
-                elif final_status == 'ERROR-FAILED':
-                    _publish_lifecycle(scan_id, 'FAILED', rabbitmq_url)
-                # FINISHED: already published by sfp__stor_rabbitmq.finished()
-            except Exception as e:
-                log.error("[worker] Could not read final scan status from per-scan DB: %s", e)
-
-        # Remove the per-scan DB — all results were forwarded via RabbitMQ,
-        # so the local file has no further value.
-        with contextlib.suppress(OSError):
-            if os.path.exists(scan_db_path):
-                os.unlink(scan_db_path)
+        abort_stop.set()
+        _handle_scan_completion(
+            scan_id, scan_db_path, SpiderFootDb, rabbitmq_url, listener, rmq_log_handler,
+        )
 
     log.info("[worker] Scan %s completed", scan_id)

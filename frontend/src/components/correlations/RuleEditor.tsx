@@ -36,6 +36,85 @@ analysis:
 headline: "Descriptive headline: {data}"
 `;
 
+function getRuleTitle(mode: 'view' | 'create' | 'edit'): string {
+  if (mode === 'create') return 'New Correlation Rule';
+  if (mode === 'edit') return 'Edit Correlation Rule';
+  return 'View Correlation Rule';
+}
+
+async function buildSaveCall(
+  yaml: string,
+  mode: 'view' | 'create' | 'edit',
+  ruleId: string | undefined,
+) {
+  const idMatch = yaml.match(/^id:\s*(\S+)/m);
+  const extractedId = idMatch ? idMatch[1] : '';
+  if (!extractedId) throw new Error('YAML must contain an "id" field');
+  return mode === 'create'
+    ? createCorrelationRule(extractedId, yaml)
+    : updateCorrelationRule(ruleId ?? '', yaml);
+}
+
+interface RuleEditorActionsProps {
+  isReadOnly: boolean;
+  yaml: string;
+  validationStatus: 'idle' | 'validating' | 'valid' | 'invalid';
+  validationError: string;
+  saveStatus: 'idle' | 'saving' | 'saved' | 'error';
+  saveError: string;
+  onValidate: () => void;
+  onSave: () => void;
+  onDuplicate: () => void;
+}
+
+function RuleEditorActions({
+  isReadOnly, yaml, validationStatus, validationError,
+  saveStatus, saveError, onValidate, onSave, onDuplicate,
+}: RuleEditorActionsProps) {
+  return (
+    <div className="flex items-center gap-3">
+      {!isReadOnly && (
+        <>
+          <button
+            onClick={onValidate}
+            disabled={validationStatus === 'validating' || !yaml.trim()}
+            className="rounded-md bg-[var(--sf-bg-secondary)] px-4 py-2 text-sm font-medium hover:bg-[var(--sf-border)] disabled:opacity-50"
+          >
+            {validationStatus === 'validating' ? 'Validating...' : 'Validate'}
+          </button>
+          <button
+            onClick={onSave}
+            disabled={saveStatus === 'saving' || !yaml.trim()}
+            className="rounded-md bg-[var(--sf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {saveStatus === 'saving' ? 'Saving...' : 'Save'}
+          </button>
+        </>
+      )}
+      {isReadOnly && (
+        <button
+          onClick={onDuplicate}
+          className="rounded-md bg-[var(--sf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+        >
+          Duplicate as User Rule
+        </button>
+      )}
+      {validationStatus === 'valid' && (
+        <span className="text-sm text-green-600 dark:text-green-400">Rule is valid</span>
+      )}
+      {validationStatus === 'invalid' && (
+        <span className="text-sm text-red-600 dark:text-red-400">{validationError}</span>
+      )}
+      {saveStatus === 'saved' && (
+        <span className="text-sm text-green-600 dark:text-green-400">Saved!</span>
+      )}
+      {saveStatus === 'error' && (
+        <span className="text-sm text-red-600 dark:text-red-400">{saveError}</span>
+      )}
+    </div>
+  );
+}
+
 export default function RuleEditor({ ruleId, mode, onClose }: RuleEditorProps) {
   const queryClient = useQueryClient();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -84,21 +163,7 @@ export default function RuleEditor({ ruleId, mode, onClose }: RuleEditorProps) {
   });
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
-      // Extract rule_id from YAML
-      const idMatch = yaml.match(/^id:\s*(\S+)/m);
-      const extractedId = idMatch ? idMatch[1] : '';
-
-      if (!extractedId) {
-        throw new Error('YAML must contain an "id" field');
-      }
-
-      if (mode === 'create') {
-        return createCorrelationRule(extractedId, yaml);
-      } else {
-        return updateCorrelationRule(ruleId!, yaml);
-      }
-    },
+    mutationFn: () => buildSaveCall(yaml, mode, ruleId),
     onMutate: () => {
       setSaveStatus('saving');
       setSaveError('');
@@ -136,7 +201,7 @@ export default function RuleEditor({ ruleId, mode, onClose }: RuleEditorProps) {
   };
 
   const isReadOnly = mode === 'view' && ruleData?.source === 'builtin';
-  const title = mode === 'create' ? 'New Correlation Rule' : mode === 'edit' ? 'Edit Correlation Rule' : 'View Correlation Rule';
+  const title = getRuleTitle(mode);
 
   if (isLoading && ruleId) {
     return (
@@ -215,62 +280,24 @@ export default function RuleEditor({ ruleId, mode, onClose }: RuleEditorProps) {
           </div>
 
           {/* Action bar */}
-          <div className="flex items-center gap-3">
-            {!isReadOnly && (
-              <>
-                <button
-                  onClick={() => validateMutation.mutate()}
-                  disabled={validationStatus === 'validating' || !yaml.trim()}
-                  className="rounded-md bg-[var(--sf-bg-secondary)] px-4 py-2 text-sm font-medium hover:bg-[var(--sf-border)] disabled:opacity-50"
-                >
-                  {validationStatus === 'validating' ? 'Validating...' : 'Validate'}
-                </button>
-                <button
-                  onClick={() => saveMutation.mutate()}
-                  disabled={saveStatus === 'saving' || !yaml.trim()}
-                  className="rounded-md bg-[var(--sf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-                >
-                  {saveStatus === 'saving' ? 'Saving...' : 'Save'}
-                </button>
-              </>
-            )}
-
-            {/* Duplicate as user rule (for built-in rules) */}
-            {isReadOnly && (
-              <button
-                onClick={() => {
-                  // Modify the YAML id to avoid conflict
-                  const modifiedYaml = yaml.replace(
-                    /^id:\s*(\S+)/m,
-                    (_, id) => `id: ${id}_custom`
-                  );
-                  setYaml(modifiedYaml);
-                  // Switch to create mode (parent will handle)
-                  onClose();
-                  // The parent page needs to open in create mode - we signal via a brief timeout
-                }}
-                className="rounded-md bg-[var(--sf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-              >
-                Duplicate as User Rule
-              </button>
-            )}
-
-            {/* Validation status */}
-            {validationStatus === 'valid' && (
-              <span className="text-sm text-green-600 dark:text-green-400">Rule is valid</span>
-            )}
-            {validationStatus === 'invalid' && (
-              <span className="text-sm text-red-600 dark:text-red-400">{validationError}</span>
-            )}
-
-            {/* Save status */}
-            {saveStatus === 'saved' && (
-              <span className="text-sm text-green-600 dark:text-green-400">Saved!</span>
-            )}
-            {saveStatus === 'error' && (
-              <span className="text-sm text-red-600 dark:text-red-400">{saveError}</span>
-            )}
-          </div>
+          <RuleEditorActions
+            isReadOnly={isReadOnly}
+            yaml={yaml}
+            validationStatus={validationStatus}
+            validationError={validationError}
+            saveStatus={saveStatus}
+            saveError={saveError}
+            onValidate={() => validateMutation.mutate()}
+            onSave={() => saveMutation.mutate()}
+            onDuplicate={() => {
+              const modifiedYaml = yaml.replace(
+                /^id:\s*(\S+)/m,
+                (_, id) => `id: ${id}_custom`
+              );
+              setYaml(modifiedYaml);
+              onClose();
+            }}
+          />
         </div>
 
         {/* AI Assistant Panel */}
