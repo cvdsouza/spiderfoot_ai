@@ -390,7 +390,6 @@ def run_scan_task(task: dict) -> None:
         # correct lifecycle so the ConsumerThread can update the API DB.
         if os.path.exists(scan_db_path):
             try:
-                from spiderfoot import SpiderFootDb as _SpiderFootDb  # noqa: PLC0415
                 _chk = _SpiderFootDb({'__database': scan_db_path, '__modules__': {},
                                       '__correlationrules__': []})
                 row = _chk.scanInstanceGet(scan_id)
