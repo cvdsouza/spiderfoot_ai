@@ -7,7 +7,7 @@ during the migration period.
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 
 from api.dependencies import get_config, get_db, get_logging_queue
 from api.routers import scans, results, modules, correlation_rules, system, settings, exports

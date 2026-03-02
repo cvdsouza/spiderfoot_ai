@@ -5,7 +5,7 @@ import logging
 from copy import deepcopy
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File
 from fastapi.responses import Response
 
 from api.dependencies import get_config, get_default_config, get_db
@@ -138,7 +138,7 @@ def reset_settings(
 ) -> list:
     """Reset all settings to factory defaults."""
     try:
-        sf = SpiderFoot(default_config)
+        SpiderFoot(default_config)
         dbh.configClear()
         config.update(deepcopy(default_config))
     except Exception as e:

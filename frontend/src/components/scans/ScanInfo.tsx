@@ -15,6 +15,8 @@ import CorrelationCard from './CorrelationCard';
 import { useState } from 'react';
 import SpideyIcon from '../common/SpideyIcon';
 
+type ApiRow = Array<string | number | boolean | null>;
+
 type TabType = 'summary' | 'correlations' | 'browse' | 'log' | 'graph' | 'config' | 'ai-insights';
 
 export default function ScanInfo() {
@@ -34,17 +36,19 @@ export default function ScanInfo() {
     setActiveTab('correlations');
   };
 
+  const scanId = id ?? '';
+
   const stopMutation = useMutation({
-    mutationFn: () => stopScan(id!),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scanStatus', id] }),
+    mutationFn: () => stopScan(scanId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scanStatus', scanId] }),
   });
 
-  const { data: statusData } = useScanStatus(id!);
+  const { data: statusData } = useScanStatus(scanId);
 
   const { data: summaryData = [] } = useQuery({
-    queryKey: ['scanSummary', id],
+    queryKey: ['scanSummary', scanId],
     queryFn: async () => {
-      const { data } = await getScanSummary(id!);
+      const { data } = await getScanSummary(scanId);
       return data;
     },
     enabled: !!id,
@@ -52,16 +56,16 @@ export default function ScanInfo() {
   });
 
   const { data: correlations = [] } = useQuery({
-    queryKey: ['scanCorrelations', id],
+    queryKey: ['scanCorrelations', scanId],
     queryFn: async () => {
-      const { data } = await getScanCorrelations(id!);
+      const { data } = await getScanCorrelations(scanId);
       return data;
     },
     enabled: !!id && activeTab === 'correlations',
     refetchInterval: activeTab === 'correlations' && statusData?.[5] === 'RUNNING' ? 5000 : false,
   });
 
-  if (!statusData) {
+  if (!id || !statusData) {
     return (
       <div className="flex items-center justify-center py-12">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--sf-primary)] border-t-transparent" />
@@ -148,20 +152,20 @@ export default function ScanInfo() {
                   <h3 className="mb-3 text-sm font-medium text-[var(--sf-text-muted)]">Data Distribution</h3>
                   <div className="space-y-1.5">
                     {(() => {
-                      const sorted = [...summaryData].sort((a: any[], b: any[]) => b[3] - a[3]);
+                      const sorted = [...summaryData as ApiRow[]].sort((a, b) => Number(b[3]) - Number(a[3]));
                       const top = sorted.slice(0, 15);
-                      const maxTotal = top.length > 0 ? top[0][3] : 1;
-                      return top.map((row: any[], idx: number) => (
+                      const maxTotal = top.length > 0 ? Number(top[0][3]) : 1;
+                      return top.map((row: ApiRow, idx: number) => (
                         <div
                           key={idx}
                           className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-[var(--sf-bg-secondary)]"
-                          onClick={() => handleEventTypeClick(row[0])}
+                          onClick={() => handleEventTypeClick(String(row[0]))}
                         >
                           <span className="w-44 shrink-0 truncate text-xs font-mono text-[var(--sf-primary)]">{row[0]}</span>
                           <div className="h-5 flex-1 overflow-hidden rounded bg-[var(--sf-bg-secondary)]">
                             <div
                               className="h-full rounded bg-[var(--sf-primary)] opacity-70"
-                              style={{ width: `${maxTotal > 0 ? (row[3] / maxTotal) * 100 : 0}%` }}
+                              style={{ width: `${maxTotal > 0 ? (Number(row[3]) / maxTotal) * 100 : 0}%` }}
                             />
                           </div>
                           <span className="w-14 shrink-0 text-right text-xs text-[var(--sf-text-muted)]">{row[3]}</span>
@@ -184,10 +188,10 @@ export default function ScanInfo() {
                       </tr>
                     </thead>
                     <tbody>
-                      {summaryData.map((row: any[], idx: number) => (
+                      {(summaryData as ApiRow[]).map((row: ApiRow, idx: number) => (
                         <tr
                           key={idx}
-                          onClick={() => handleEventTypeClick(row[0])}
+                          onClick={() => handleEventTypeClick(String(row[0]))}
                           className="cursor-pointer border-b border-[var(--sf-border)] hover:bg-[var(--sf-bg-secondary)]"
                         >
                           <td className="px-3 py-2 font-mono text-xs text-[var(--sf-primary)]">{row[0]}</td>
@@ -210,7 +214,7 @@ export default function ScanInfo() {
             {/* Risk level filter pills */}
             <div className="mb-4 flex flex-wrap items-center gap-2">
               {['HIGH', 'MEDIUM', 'LOW', 'INFO'].map((level) => {
-                const count = correlations.filter((r: any[]) => r[3] === level).length;
+                const count = (correlations as ApiRow[]).filter((r: ApiRow) => r[3] === level).length;
                 if (count === 0) return null;
                 const isActive = riskFilter === level;
                 const colorMap: Record<string, string> = {
@@ -251,10 +255,10 @@ export default function ScanInfo() {
               <p className="text-[var(--sf-text-muted)]">No correlations found.</p>
             ) : (
               <div className="space-y-3">
-                {correlations
-                  .filter((row: any[]) => !riskFilter || row[3] === riskFilter)
-                  .map((row: any[], idx: number) => (
-                    <CorrelationCard key={row[0] || idx} scanId={id!} correlation={row} />
+                {(correlations as ApiRow[])
+                  .filter((row: ApiRow) => !riskFilter || row[3] === riskFilter)
+                  .map((row: ApiRow, idx: number) => (
+                    <CorrelationCard key={String(row[0]) || String(idx)} scanId={id} correlation={row} />
                   ))}
               </div>
             )}
@@ -263,27 +267,27 @@ export default function ScanInfo() {
 
         {activeTab === 'browse' && (
           <EventBrowser
-            scanId={id!}
+            scanId={id}
             isRunning={status === 'RUNNING'}
             initialEventType={browseEventType}
-            eventTypes={(summaryData as any[]).map((row: any[]) => String(row[0])).sort()}
+            eventTypes={(summaryData as ApiRow[]).map((row: ApiRow) => String(row[0])).sort()}
           />
         )}
 
         {activeTab === 'graph' && (
-          <GraphView scanId={id!} />
+          <GraphView scanId={id} />
         )}
 
         {activeTab === 'log' && (
-          <ScanLog scanId={id!} isRunning={status === 'RUNNING'} />
+          <ScanLog scanId={id} isRunning={status === 'RUNNING'} />
         )}
 
         {activeTab === 'ai-insights' && (
-          <AiInsights scanId={id!} scanStatus={status} />
+          <AiInsights scanId={id} scanStatus={status} />
         )}
 
         {activeTab === 'config' && (
-          <ScanConfig scanId={id!} />
+          <ScanConfig scanId={id} />
         )}
       </div>
     </div>

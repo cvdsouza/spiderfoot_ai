@@ -248,7 +248,7 @@ def scan_graph(
     try:
         data = dbh.scanResultEvent(scan_id, filterFp=True)
     except Exception:
-        raise HTTPException(status_code=404, detail="Scan not found")
+        raise HTTPException(status_code=404, detail="Scan not found") from None
 
     res = dbh.scanInstanceGet(scan_id)
     if not res:
@@ -339,7 +339,7 @@ def set_false_positive(
     try:
         ids = json.loads(resultids)
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid resultids format")
+        raise HTTPException(status_code=400, detail="Invalid resultids format") from None
 
     # Get all child elements
     allIds = list(ids)
@@ -352,7 +352,7 @@ def set_false_positive(
     try:
         dbh.scanResultsUpdateFP(scan_id, allIds, fp)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update false positives: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update false positives: {e}") from e
 
     return ["SUCCESS", ""]
 

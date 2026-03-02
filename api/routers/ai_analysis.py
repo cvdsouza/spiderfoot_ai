@@ -1,16 +1,16 @@
 """AI analysis API routes."""
 
+import contextlib
 import json
-import logging
 import time
-from typing import Any
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from api.dependencies import get_config, get_db
 from api.middleware.auth import require_permission
 from api.models.ai_analysis import AiAnalysisRequest, AiChatRequest, AiConfigUpdate
-from api.services.encryption import encrypt_api_key, decrypt_api_key
+from api.services.encryption import encrypt_api_key
 from api.services.ai_analysis import run_analysis_background, test_api_key
 from api.services.ai_query import run_nlq
 from spiderfoot import SpiderFootDb
@@ -337,10 +337,8 @@ def get_chat_history(
         }
         # Parse JSON content for tool_call and tool_result roles
         if row[2] in ("tool_call", "tool_result"):
-            try:
+            with contextlib.suppress(json.JSONDecodeError, TypeError):
                 msg["content"] = json.loads(row[3])
-            except (json.JSONDecodeError, TypeError):
-                pass
         messages.append(msg)
 
     return messages

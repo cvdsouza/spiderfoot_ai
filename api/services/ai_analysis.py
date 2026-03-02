@@ -8,7 +8,6 @@ import json
 import logging
 import re
 import threading
-import time
 
 import requests as http_requests
 
@@ -32,6 +31,7 @@ def _sanitize_data(value: str) -> str:
     if not value or not isinstance(value, str):
         return value
     return _INJECTION_PATTERNS.sub('[FILTERED]', value)
+
 
 log = logging.getLogger(f"spiderfoot.{__name__}")
 

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { getScanGraph } from '../../api/results';
-import { useRef, useState, useCallback, useMemo, useEffect, useLayoutEffect, lazy, Suspense } from 'react';
+import { useRef, useState, useCallback, useMemo, useLayoutEffect, lazy, Suspense } from 'react';
 import ForceGraph2D, { type ForceGraphMethods as ForceGraph2DMethods } from 'react-force-graph-2d';
 import type { ForceGraphMethods as ForceGraph3DMethods } from 'react-force-graph-3d';
 
@@ -177,30 +177,29 @@ export default function GraphView({ scanId }: GraphViewProps) {
     return {
       nodes: graphData.nodes.filter((n) => visibleIds.has(n.id)),
       links: graphData.links.filter((l) => {
-        const srcId = typeof l.source === 'object' ? (l.source as any).id : l.source;
-        const tgtId = typeof l.target === 'object' ? (l.target as any).id : l.target;
+        const srcId = typeof l.source === 'object' ? (l.source as { id: string }).id : l.source;
+        const tgtId = typeof l.target === 'object' ? (l.target as { id: string }).id : l.target;
         return visibleIds.has(srcId) && visibleIds.has(tgtId);
       }),
     };
   }, [graphData, hiddenTypes]);
 
-  // Clear selected node if its type is hidden
-  useEffect(() => {
-    if (selectedNode && hiddenTypes.has(selectedNode.nodeType)) {
-      setSelectedNode(null);
-    }
-  }, [hiddenTypes, selectedNode]);
-
   function toggleType(key: string) {
     setHiddenTypes((prev) => {
       const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+        // Clear selected node if its type is being hidden
+        if (selectedNode?.nodeType === key) setSelectedNode(null);
+      }
       return next;
     });
   }
 
   const handleNodeHover = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (node: any) => {
       const nodeId = node?.id as string | undefined;
       setHoverNode(nodeId || null);
@@ -225,6 +224,7 @@ export default function GraphView({ scanId }: GraphViewProps) {
     [adjacency],
   );
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleNodeClick = useCallback((node: any) => {
     setSelectedNode(node as GraphNode);
   }, []);
@@ -242,6 +242,7 @@ export default function GraphView({ scanId }: GraphViewProps) {
   }, [mode]);
 
   const nodeCanvasObject = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
       const n = node as GraphNode & { x: number; y: number };
       const label = n.name;
@@ -281,6 +282,7 @@ export default function GraphView({ scanId }: GraphViewProps) {
   );
 
   const nodePointerAreaPaint = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (node: any, color: string, ctx: CanvasRenderingContext2D) => {
       const n = node as GraphNode & { x: number; y: number };
       const radius = Math.sqrt(n.val) * 2 + 2; // slightly larger for easier clicking
@@ -293,6 +295,7 @@ export default function GraphView({ scanId }: GraphViewProps) {
   );
 
   const linkColor = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (link: any) => {
       if (highlightNodes.size === 0) return 'rgba(156,163,175,0.3)';
       const key = `${typeof link.source === 'object' ? link.source.id : link.source}-${typeof link.target === 'object' ? link.target.id : link.target}`;
@@ -302,6 +305,7 @@ export default function GraphView({ scanId }: GraphViewProps) {
   );
 
   const linkWidth = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (link: any) => {
       if (highlightNodes.size === 0) return 0.5;
       const key = `${typeof link.source === 'object' ? link.source.id : link.source}-${typeof link.target === 'object' ? link.target.id : link.target}`;
@@ -309,6 +313,13 @@ export default function GraphView({ scanId }: GraphViewProps) {
     },
     [highlightNodes, highlightLinks],
   );
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const get3DNodeColor = (node: any) => (node as GraphNode).color;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const get3DNodeVal = (node: any) => (node as GraphNode).val;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const get3DNodeLabel = (node: any) => (node as GraphNode).name;
 
   if (isLoading) {
     return (
@@ -451,9 +462,9 @@ export default function GraphView({ scanId }: GraphViewProps) {
               width={containerWidth}
               height={600}
               backgroundColor="rgba(0,0,0,0)"
-              nodeColor={(node: any) => (node as GraphNode).color}
-              nodeVal={(node: any) => (node as GraphNode).val}
-              nodeLabel={(node: any) => (node as GraphNode).name}
+              nodeColor={get3DNodeColor}
+              nodeVal={get3DNodeVal}
+              nodeLabel={get3DNodeLabel}
               linkColor={() => 'rgba(156,163,175,0.3)'}
               linkWidth={0.5}
               onNodeClick={handleNodeClick}

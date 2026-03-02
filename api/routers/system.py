@@ -1,6 +1,5 @@
 """System API routes (ping, query, vacuum)."""
 
-import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -36,7 +35,7 @@ def query(query: str, user: dict = Depends(require_permission("settings", "updat
         result = dbh.dbhQuery(query)
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Query failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Query failed: {e}") from e
 
 
 @router.post("/vacuum")

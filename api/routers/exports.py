@@ -11,7 +11,7 @@ import openpyxl
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
-from api.dependencies import get_config, get_db
+from api.dependencies import get_db
 from api.middleware.auth import require_permission
 from spiderfoot import SpiderFootDb, SpiderFootHelpers
 
@@ -71,7 +71,7 @@ def export_scan_logs(scan_id: str, dialect: str = "excel", user: dict = Depends(
     try:
         data = dbh.scanLogs(scan_id, None, None, True)
     except Exception:
-        raise HTTPException(status_code=404, detail="Scan not found")
+        raise HTTPException(status_code=404, detail="Scan not found") from None
 
     if not data:
         raise HTTPException(status_code=404, detail="Scan not found")
@@ -110,7 +110,7 @@ def export_correlations(
     try:
         data = dbh.scanCorrelationList(scan_id)
     except Exception:
-        raise HTTPException(status_code=404, detail="Scan not found")
+        raise HTTPException(status_code=404, detail="Scan not found") from None
 
     if not data:
         raise HTTPException(status_code=404, detail="No correlations found")
@@ -157,7 +157,7 @@ def export_events(
     try:
         data = dbh.scanResultEvent(scan_id, type, filterFp=True)
     except Exception:
-        raise HTTPException(status_code=404, detail="Scan not found")
+        raise HTTPException(status_code=404, detail="Scan not found") from None
 
     if not data:
         raise HTTPException(status_code=404, detail="No events found")
@@ -301,7 +301,7 @@ def export_search_results(
     try:
         data = dbh.search(criteria)
     except Exception:
-        raise HTTPException(status_code=500, detail="Search failed")
+        raise HTTPException(status_code=500, detail="Search failed") from None
 
     column_names = ["Updated", "Type", "Module", "Source", "Data"]
     rows = []

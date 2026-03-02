@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { getScanLog, getScanErrors } from '../../api/scans';
 import { useState } from 'react';
 
+type ApiRow = Array<string | number | boolean | null>;
+
 interface ScanLogProps {
   scanId: string;
   isRunning: boolean;
@@ -96,11 +98,11 @@ export default function ScanLog({ scanId, isRunning }: ScanLogProps) {
               </tr>
             </thead>
             <tbody>
-              {entries.map((row: any[], idx: number) => (
+              {(entries as ApiRow[]).map((row: ApiRow, idx: number) => (
                 <tr key={idx} className="border-b border-[var(--sf-border)] hover:bg-[var(--sf-bg-secondary)]">
                   <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--sf-text-muted)]">{row[0]}</td>
                   {!showErrors && (
-                    <td className={`px-3 py-1.5 text-xs font-medium ${LOG_LEVEL_COLORS[row[1]] || ''}`}>
+                    <td className={`px-3 py-1.5 text-xs font-medium ${LOG_LEVEL_COLORS[String(row[1])] || ''}`}>
                       {row[1]}
                     </td>
                   )}

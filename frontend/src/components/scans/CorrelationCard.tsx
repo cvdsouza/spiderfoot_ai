@@ -2,9 +2,11 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getScanEvents } from '../../api/results';
 
+type ApiRow = Array<string | number | boolean | null>;
+
 interface CorrelationCardProps {
   scanId: string;
-  correlation: any[]; // [id, title, ruleId, risk, ruleName, descr, logic, eventCount]
+  correlation: ApiRow; // [id, title, ruleId, risk, ruleName, descr, logic, eventCount]
 }
 
 export default function CorrelationCard({ scanId, correlation }: CorrelationCardProps) {
@@ -20,7 +22,7 @@ export default function CorrelationCard({ scanId, correlation }: CorrelationCard
   const { data: events = [], isLoading } = useQuery({
     queryKey: ['correlationEvents', scanId, correlationId],
     queryFn: async () => {
-      const { data } = await getScanEvents(scanId, 'ALL', false, correlationId);
+      const { data } = await getScanEvents(scanId, 'ALL', false, String(correlationId));
       return data;
     },
     enabled: isExpanded,
@@ -83,7 +85,7 @@ export default function CorrelationCard({ scanId, correlation }: CorrelationCard
                   </tr>
                 </thead>
                 <tbody>
-                  {events.map((row: any[], idx: number) => (
+                  {events.map((row: ApiRow, idx: number) => (
                     <tr key={idx} className="border-b border-[var(--sf-border)]">
                       <td className="max-w-xs truncate px-4 py-2 font-mono text-xs">{row[1]}</td>
                       <td className="max-w-xs truncate px-4 py-2 text-xs">{row[2]}</td>
