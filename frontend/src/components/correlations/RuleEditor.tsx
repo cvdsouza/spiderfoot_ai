@@ -36,13 +36,15 @@ analysis:
 headline: "Descriptive headline: {data}"
 `;
 
+/** Returns the modal title string for the given editor mode. */
 function getRuleTitle(mode: 'view' | 'create' | 'edit'): string {
   if (mode === 'create') return 'New Correlation Rule';
   if (mode === 'edit') return 'Edit Correlation Rule';
   return 'View Correlation Rule';
 }
 
-async function buildSaveCall(
+/** Validates and dispatches the save API call for create or edit mode. */
+function buildSaveCall(
   yaml: string,
   mode: 'view' | 'create' | 'edit',
   ruleId: string | undefined,
@@ -67,6 +69,7 @@ interface RuleEditorActionsProps {
   onDuplicate: () => void;
 }
 
+/** Action bar with Validate/Save/Duplicate buttons and status feedback. */
 function RuleEditorActions({
   isReadOnly, yaml, validationStatus, validationError,
   saveStatus, saveError, onValidate, onSave, onDuplicate,

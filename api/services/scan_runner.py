@@ -373,7 +373,7 @@ def run_scan_task(task: dict) -> None:
     log.info("[worker] Starting scan %s \u2014 target=%s modules=%s",
              scan_id, scan_target, module_list_str)
 
-    # \u2500\u2500 Imports (heavy \u2014 done once per task) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    # Imports (deferred — done once per task)
     from sflib import SpiderFoot  # noqa: PLC0415
     from sfscan import startSpiderFootScanner  # noqa: PLC0415
     from spiderfoot import SpiderFootDb, SpiderFootHelpers  # noqa: PLC0415
