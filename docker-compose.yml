@@ -10,13 +10,30 @@
 # With distributed workers (Phase 11):
 #     $ ./start-worker.sh --fast 2 --slow 1 --detach
 #
-# Spiderfoot data resides in a Docker volume:
-#     /var/lib/docker/volumes/spiderfoot_spiderfoot-data/_data/spiderfoot.db
+# Spiderfoot data resides in a Docker volume (PostgreSQL):
+#     /var/lib/docker/volumes/spiderfoot_postgres-data/_data/
 #
 # TLS certificates are generated automatically by ./start.sh and stored in certs/.
 # RabbitMQ only accepts encrypted AMQPS connections (port 5671).
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sf-postgres
+    command: postgres -c max_connections=300
+    environment:
+      POSTGRES_DB: spiderfoot
+      POSTGRES_USER: "${POSTGRES_USER:-spiderfoot}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-spiderfoot}"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-spiderfoot} -d spiderfoot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   rabbitmq:
     image: rabbitmq:3-management-alpine
     container_name: sf-rabbitmq
@@ -59,6 +76,8 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       # Admin credentials — set in .env before first run.
       # The admin user is created once on first startup; use the UI to change after that.
@@ -69,7 +88,10 @@ services:
       RABBITMQ_URL: "${RABBITMQ_URL:-amqps://spiderfoot:spiderfoot@rabbitmq:5671/}"
       # Path to CA certificate for broker TLS verification
       RABBITMQ_CA_CERT: "/etc/rabbitmq/certs/ca.crt"
+      # PostgreSQL connection string — used by API server and distributed workers
+      DATABASE_URL: "${DATABASE_URL:-postgresql://spiderfoot:spiderfoot@postgres:5432/spiderfoot}"
 
 volumes:
   spiderfoot-data:
   rabbitmq-data:
+  postgres-data:

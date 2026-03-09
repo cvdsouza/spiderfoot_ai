@@ -10,10 +10,10 @@ interface ScanLogProps {
 }
 
 const LOG_LEVEL_COLORS: Record<string, string> = {
-  ERROR: 'text-red-600 dark:text-red-400',
-  WARNING: 'text-orange-600 dark:text-orange-400',
-  INFO: 'text-blue-600 dark:text-blue-400',
-  DEBUG: 'text-gray-500 dark:text-gray-400',
+  ERROR:   '#FF3B30',
+  WARNING: '#FF9F0A',
+  INFO:    '#00B4FF',
+  DEBUG:   '#52525B',
 };
 
 export default function ScanLog({ scanId, isRunning }: ScanLogProps) {
@@ -44,19 +44,28 @@ export default function ScanLog({ scanId, isRunning }: ScanLogProps) {
 
   return (
     <div>
-      <div className="mb-4 flex items-center gap-3">
-        <div className="flex gap-1 rounded-md border border-[var(--sf-border)] p-0.5">
+      {/* Toolbar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+        <div style={{ display: 'flex', gap: '2px', background: '#060A0F', padding: '3px', borderRadius: '2px', border: '1px solid #18181B' }}>
           <button
             onClick={() => setShowErrors(false)}
-            className={`rounded px-2 py-1 text-xs ${!showErrors ? 'bg-[var(--sf-primary)] text-white' : ''}`}
+            style={{
+              padding: '5px 12px', background: !showErrors ? '#00B4FF' : 'transparent',
+              color: !showErrors ? '#000' : '#52525B', border: 'none', borderRadius: '2px',
+              fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em', cursor: 'pointer',
+            }}
           >
-            Log
+            LOG
           </button>
           <button
             onClick={() => setShowErrors(true)}
-            className={`rounded px-2 py-1 text-xs ${showErrors ? 'bg-[var(--sf-primary)] text-white' : ''}`}
+            style={{
+              padding: '5px 12px', background: showErrors ? '#FF3B30' : 'transparent',
+              color: showErrors ? '#000' : '#52525B', border: 'none', borderRadius: '2px',
+              fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em', cursor: 'pointer',
+            }}
           >
-            Errors
+            ERRORS
           </button>
         </div>
 
@@ -64,50 +73,61 @@ export default function ScanLog({ scanId, isRunning }: ScanLogProps) {
           <select
             value={logLimit}
             onChange={(e) => setLogLimit(Number(e.target.value))}
-            className="rounded-md border border-[var(--sf-border)] bg-[var(--sf-bg)] px-2 py-1 text-sm"
+            style={{
+              background: '#060A0F', border: '1px solid #18181B',
+              borderRadius: '2px', padding: '5px 8px',
+              color: '#A1A1AA', fontSize: '10px', cursor: 'pointer',
+            }}
           >
-            <option value={100}>Last 100</option>
-            <option value={200}>Last 200</option>
-            <option value={500}>Last 500</option>
-            <option value={1000}>Last 1000</option>
+            <option value={100}>LAST 100</option>
+            <option value={200}>LAST 200</option>
+            <option value={500}>LAST 500</option>
+            <option value={1000}>LAST 1000</option>
           </select>
         )}
 
-        <span className="ml-auto text-xs text-[var(--sf-text-muted)]">
-          {entries.length} entries
+        <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#52525B', letterSpacing: '0.1em' }}>
+          {entries.length} ENTRIES
         </span>
       </div>
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-8">
-          <div className="h-6 w-6 animate-spin rounded-full border-4 border-[var(--sf-primary)] border-t-transparent" />
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '32px' }}>
+          <div style={{
+            width: '24px', height: '24px', borderRadius: '50%',
+            border: '2px solid #00B4FF30', borderTopColor: '#00B4FF',
+            animation: 'sf-spin 1.2s linear infinite',
+          }} />
         </div>
       ) : entries.length === 0 ? (
-        <p className="text-[var(--sf-text-muted)]">
-          {showErrors ? 'No errors recorded.' : 'No log entries yet.'}
-        </p>
+        <div style={{ textAlign: 'center', padding: '48px 0', fontSize: '9px', letterSpacing: '0.2em', color: '#3F3F46' }}>
+          {showErrors ? 'NO ERRORS RECORDED' : 'NO LOG ENTRIES YET'}
+        </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-[var(--sf-border)]">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-[var(--sf-border)] bg-[var(--sf-bg-secondary)]">
-              <tr>
-                <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">Time</th>
-                {!showErrors && <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">Level</th>}
-                <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">Module</th>
-                <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">Message</th>
+        <div style={{ border: '1px solid #18181B', borderRadius: '2px', overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+            <thead>
+              <tr style={{ background: '#060A0F', borderBottom: '1px solid #18181B' }}>
+                <th style={{ padding: '6px 12px', textAlign: 'left', fontSize: '8px', letterSpacing: '0.15em', color: '#3F3F46', fontWeight: 700 }}>TIME</th>
+                {!showErrors && <th style={{ padding: '6px 12px', textAlign: 'left', fontSize: '8px', letterSpacing: '0.15em', color: '#3F3F46', fontWeight: 700 }}>LEVEL</th>}
+                <th style={{ padding: '6px 12px', textAlign: 'left', fontSize: '8px', letterSpacing: '0.15em', color: '#3F3F46', fontWeight: 700 }}>MODULE</th>
+                <th style={{ padding: '6px 12px', textAlign: 'left', fontSize: '8px', letterSpacing: '0.15em', color: '#3F3F46', fontWeight: 700 }}>MESSAGE</th>
               </tr>
             </thead>
             <tbody>
               {(entries as ApiRow[]).map((row: ApiRow, idx: number) => (
-                <tr key={idx} className="border-b border-[var(--sf-border)] hover:bg-[var(--sf-bg-secondary)]">
-                  <td className="whitespace-nowrap px-3 py-1.5 text-xs text-[var(--sf-text-muted)]">{row[0]}</td>
+                <tr key={idx} style={{ borderBottom: '1px solid #0D1117' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#0D1117')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <td style={{ padding: '5px 12px', whiteSpace: 'nowrap', color: '#52525B', fontFamily: 'monospace', fontSize: '10px' }}>{row[0]}</td>
                   {!showErrors && (
-                    <td className={`px-3 py-1.5 text-xs font-medium ${LOG_LEVEL_COLORS[String(row[1])] || ''}`}>
+                    <td style={{ padding: '5px 12px', fontWeight: 700, fontSize: '10px', color: LOG_LEVEL_COLORS[String(row[1])] || '#71717A', letterSpacing: '0.05em' }}>
                       {row[1]}
                     </td>
                   )}
-                  <td className="px-3 py-1.5 font-mono text-xs">{showErrors ? row[1] : row[2]}</td>
-                  <td className="max-w-xl truncate px-3 py-1.5 text-xs">{showErrors ? row[2] : row[3]}</td>
+                  <td style={{ padding: '5px 12px', fontFamily: 'monospace', color: '#00B4FF', fontSize: '10px' }}>{showErrors ? row[1] : row[2]}</td>
+                  <td style={{ padding: '5px 12px', color: '#A1A1AA', maxWidth: '500px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{showErrors ? row[2] : row[3]}</td>
                 </tr>
               ))}
             </tbody>

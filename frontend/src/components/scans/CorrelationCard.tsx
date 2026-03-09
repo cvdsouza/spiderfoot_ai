@@ -6,15 +6,22 @@ type ApiRow = Array<string | number | boolean | null>;
 
 interface CorrelationCardProps {
   scanId: string;
-  correlation: ApiRow; // [id, title, ruleId, risk, ruleName, descr, logic, eventCount]
+  correlation: ApiRow;
 }
+
+const RISK_COLORS: Record<string, { label: string; bg: string; border: string }> = {
+  HIGH:   { label: '#FF3B30', bg: '#280A08', border: '#FF3B30' },
+  MEDIUM: { label: '#FF9F0A', bg: '#271500', border: '#FF9F0A' },
+  LOW:    { label: '#FFD60A', bg: '#1F1B00', border: '#FFD60A' },
+  INFO:   { label: '#00B4FF', bg: '#001828', border: '#00B4FF' },
+};
 
 export default function CorrelationCard({ scanId, correlation }: CorrelationCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const correlationId = correlation[0];
   const title = correlation[1];
-  const risk = correlation[3];
+  const risk = String(correlation[3] || 'INFO');
   const description = correlation[5];
   const eventCount = correlation[7];
   const ruleId = correlation[2];
@@ -28,69 +35,82 @@ export default function CorrelationCard({ scanId, correlation }: CorrelationCard
     enabled: isExpanded,
   });
 
-  const riskColorClass =
-    risk === 'HIGH'
-      ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
-      : risk === 'MEDIUM'
-        ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
-        : risk === 'LOW'
-          ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300'
-          : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300';
+  const c = RISK_COLORS[risk] || RISK_COLORS.INFO;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-[var(--sf-border)]">
-      {/* Header - clickable */}
+    <div style={{
+      borderLeft: `3px solid ${c.border}`,
+      background: '#0A0E14',
+      border: '1px solid #18181B',
+      borderLeftWidth: '3px',
+      borderLeftColor: c.border,
+    }}>
+      {/* Header */}
       <div
         onClick={() => setIsExpanded(!isExpanded)}
-        className="flex cursor-pointer items-center gap-2 p-4 transition-colors hover:bg-[var(--sf-bg-secondary)]"
+        style={{
+          display: 'flex', alignItems: 'center', gap: '10px',
+          padding: '12px 16px', cursor: 'pointer',
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.background = '#0D1117')}
+        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
       >
-        <svg
-          className={`h-4 w-4 shrink-0 text-[var(--sf-text-muted)] transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
-
-        <span className={`rounded px-2 py-0.5 text-xs font-medium ${riskColorClass}`}>{risk}</span>
-        <span className="font-medium">{title}</span>
-        <span className="ml-auto shrink-0 text-xs text-[var(--sf-text-muted)]">{eventCount} events</span>
+        <span style={{ color: '#52525B', fontSize: '10px', transition: 'transform 0.15s', display: 'inline-block', transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+        <span style={{
+          background: c.bg, color: c.label, border: `1px solid ${c.border}50`,
+          borderRadius: '2px', padding: '2px 7px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em',
+          flexShrink: 0,
+        }}>
+          {risk}
+        </span>
+        <span style={{ fontSize: '12px', color: '#F4F4F5', fontWeight: 500, flex: 1 }}>{title}</span>
+        <span style={{ fontSize: '9px', color: '#52525B', flexShrink: 0, letterSpacing: '0.05em' }}>
+          {eventCount} EVENTS
+        </span>
       </div>
 
       {/* Description */}
-      <div className="px-4 pb-3 pl-10">
-        <p className="text-sm text-[var(--sf-text-muted)]">{description}</p>
-        <p className="mt-1 text-xs text-[var(--sf-text-muted)]">Rule: {ruleId}</p>
+      <div style={{ padding: '0 16px 12px 42px' }}>
+        <p style={{ fontSize: '11px', color: '#71717A', lineHeight: 1.5 }}>{description}</p>
+        <p style={{ marginTop: '4px', fontSize: '9px', color: '#3F3F46', fontFamily: 'monospace', letterSpacing: '0.05em' }}>
+          RULE: {ruleId}
+        </p>
       </div>
 
-      {/* Expanded event list */}
+      {/* Expanded events */}
       {isExpanded && (
-        <div className="border-t border-[var(--sf-border)] bg-[var(--sf-bg-secondary)]">
+        <div style={{ borderTop: '1px solid #18181B', background: '#060A0F' }}>
           {isLoading ? (
-            <div className="flex items-center justify-center py-4">
-              <div className="h-5 w-5 animate-spin rounded-full border-2 border-[var(--sf-primary)] border-t-transparent" />
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '16px' }}>
+              <div style={{
+                width: '20px', height: '20px', borderRadius: '50%',
+                border: '2px solid #00B4FF30', borderTopColor: '#00B4FF',
+                animation: 'sf-spin 1.2s linear infinite',
+              }} />
             </div>
           ) : events.length === 0 ? (
-            <p className="px-4 py-3 text-sm text-[var(--sf-text-muted)]">No events found for this correlation.</p>
+            <p style={{ padding: '12px 16px', fontSize: '11px', color: '#52525B' }}>
+              No events found for this correlation.
+            </p>
           ) : (
-            <div className="max-h-96 overflow-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="sticky top-0 border-b border-[var(--sf-border)] bg-[var(--sf-bg-secondary)]">
-                  <tr>
-                    <th className="px-4 py-2 text-xs font-medium text-[var(--sf-text-muted)]">Data</th>
-                    <th className="px-4 py-2 text-xs font-medium text-[var(--sf-text-muted)]">Source Data</th>
-                    <th className="px-4 py-2 text-xs font-medium text-[var(--sf-text-muted)]">Module</th>
-                    <th className="px-4 py-2 text-xs font-medium text-[var(--sf-text-muted)]">Identified</th>
+            <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                <thead>
+                  <tr style={{ background: '#060A0F', position: 'sticky', top: 0 }}>
+                    {['DATA', 'SOURCE DATA', 'MODULE', 'IDENTIFIED'].map((h) => (
+                      <th key={h} style={{ padding: '6px 12px', textAlign: 'left', fontSize: '8px', letterSpacing: '0.15em', color: '#3F3F46', fontWeight: 700, borderBottom: '1px solid #18181B' }}>
+                        {h}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {events.map((row: ApiRow, idx: number) => (
-                    <tr key={idx} className="border-b border-[var(--sf-border)]">
-                      <td className="max-w-xs truncate px-4 py-2 font-mono text-xs">{row[1]}</td>
-                      <td className="max-w-xs truncate px-4 py-2 text-xs">{row[2]}</td>
-                      <td className="whitespace-nowrap px-4 py-2 font-mono text-xs">{row[3]}</td>
-                      <td className="whitespace-nowrap px-4 py-2 text-xs text-[var(--sf-text-muted)]">{row[0]}</td>
+                  {(events as ApiRow[]).map((row: ApiRow, idx: number) => (
+                    <tr key={idx} style={{ borderBottom: '1px solid #0D1117' }}>
+                      <td style={{ padding: '6px 12px', fontFamily: 'monospace', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#A1A1AA' }}>{row[1]}</td>
+                      <td style={{ padding: '6px 12px', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#71717A' }}>{row[2]}</td>
+                      <td style={{ padding: '6px 12px', fontFamily: 'monospace', whiteSpace: 'nowrap', color: '#00B4FF' }}>{row[3]}</td>
+                      <td style={{ padding: '6px 12px', whiteSpace: 'nowrap', color: '#52525B' }}>{row[0]}</td>
                     </tr>
                   ))}
                 </tbody>

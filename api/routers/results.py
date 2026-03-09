@@ -80,17 +80,16 @@ def run_scan_correlations(
     # Clear existing correlations so results are fresh, then commit
     # immediately so the background task starts with a clean slate and
     # no open write transaction blocks other DB writers.
-    with dbh.dbhLock:
-        dbh.dbh.execute(
-            "DELETE FROM tbl_scan_correlation_results_events WHERE correlation_id IN "
-            "(SELECT id FROM tbl_scan_correlation_results WHERE scan_instance_id=?)",
-            (scan_id,)
-        )
-        dbh.dbh.execute(
-            "DELETE FROM tbl_scan_correlation_results WHERE scan_instance_id=?",
-            (scan_id,)
-        )
-        dbh.conn.commit()
+    dbh.dbh.execute(
+        "DELETE FROM tbl_scan_correlation_results_events WHERE correlation_id IN "
+        "(SELECT id FROM tbl_scan_correlation_results WHERE scan_instance_id = %s)",
+        (scan_id,)
+    )
+    dbh.dbh.execute(
+        "DELETE FROM tbl_scan_correlation_results WHERE scan_instance_id = %s",
+        (scan_id,)
+    )
+    dbh.conn.commit()
 
     # Schedule the correlation run as a background task so the HTTP
     # response returns immediately (correlations can take several minutes

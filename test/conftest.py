@@ -1,28 +1,43 @@
+import os
+
 import pytest
+from testcontainers.postgres import PostgresContainer
+
 from spiderfoot import SpiderFootHelpers
 
 
+@pytest.fixture(scope="session")
+def pg_container():
+    """Spin up an ephemeral PostgreSQL 16 container for the test session."""
+    with PostgresContainer("postgres:16-alpine") as pg:
+        yield pg
+
+
 @pytest.fixture(autouse=True)
-def default_options(request):
+def default_options(request, pg_container):
+    db_url = pg_container.get_connection_url()
+    # testcontainers returns 'postgresql+psycopg2://...'; strip the dialect suffix
+    db_url = db_url.replace("postgresql+psycopg2://", "postgresql://")
+
     request.cls.default_options = {
         '_debug': False,
-        '__logging': True,  # Logging in general
-        '__outputfilter': None,  # Event types to filter from modules' output
-        '_useragent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:62.0) Gecko/20100101 Firefox/62.0',  # User-Agent to use for HTTP requests
-        '_dnsserver': '',  # Override the default resolver
-        '_fetchtimeout': 5,  # number of seconds before giving up on a fetch
+        '__logging': True,
+        '__outputfilter': None,
+        '_useragent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:62.0) Gecko/20100101 Firefox/62.0',
+        '_dnsserver': '',
+        '_fetchtimeout': 5,
         '_internettlds': 'https://publicsuffix.org/list/effective_tld_names.dat',
         '_internettlds_cache': 72,
         '_genericusers': ",".join(SpiderFootHelpers.usernamesFromWordlists(['generic-usernames'])),
-        '__database': f"{SpiderFootHelpers.dataPath()}/spiderfoot.test.db",  # note: test database file
-        '__modules__': None,  # List of modules. Will be set after start-up.
-        '__correlationrules__': None,  # List of correlation rules. Will be set after start-up.
+        '__database_url': db_url,
+        '__modules__': None,
+        '__correlationrules__': None,
         '_socks1type': '',
         '_socks2addr': '',
         '_socks3port': '',
         '_socks4user': '',
         '_socks5pwd': '',
-        '__logstdout': False
+        '__logstdout': False,
     }
 
     request.cls.web_default_options = {
@@ -46,8 +61,10 @@ def default_options(request):
 
 
 @pytest.fixture
-def fastapi_test_config():
+def fastapi_test_config(pg_container):
     """Configuration for FastAPI test client."""
+    db_url = pg_container.get_connection_url()
+    db_url = db_url.replace("postgresql+psycopg2://", "postgresql://")
     return {
         '_debug': False,
         '__logging': False,
@@ -58,7 +75,7 @@ def fastapi_test_config():
         '_internettlds': 'https://publicsuffix.org/list/effective_tld_names.dat',
         '_internettlds_cache': 72,
         '_genericusers': '',
-        '__database': f"{SpiderFootHelpers.dataPath()}/spiderfoot.test.db",
+        '__database_url': db_url,
         '__modules__': None,
         '__correlationrules__': None,
         '_socks1type': '',
@@ -71,10 +88,15 @@ def fastapi_test_config():
 
 
 @pytest.fixture
-def fastapi_client(fastapi_test_config):
+def fastapi_client(fastapi_test_config, pg_container):
     """Create a FastAPI test client."""
     from fastapi.testclient import TestClient
+
     from api.app import create_app
+
+    db_url = pg_container.get_connection_url()
+    db_url = db_url.replace("postgresql+psycopg2://", "postgresql://")
+    os.environ['DATABASE_URL'] = db_url
 
     app = create_app(config=fastapi_test_config)
     with TestClient(app) as client:

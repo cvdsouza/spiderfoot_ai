@@ -7,10 +7,24 @@ import RuleEditor from './RuleEditor';
 type SourceFilter = 'all' | 'builtin' | 'user';
 type RiskFilter = 'all' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
 
+const RISK_COLORS: Record<string, { label: string; bg: string; border: string }> = {
+  HIGH:   { label: '#FF3B30', bg: '#280A08', border: '#FF3B30' },
+  MEDIUM: { label: '#FF9F0A', bg: '#271500', border: '#FF9F0A' },
+  LOW:    { label: '#FFD60A', bg: '#1F1B00', border: '#FFD60A' },
+  INFO:   { label: '#00B4FF', bg: '#001828', border: '#00B4FF' },
+};
+
+const SOURCE_LABELS: Record<SourceFilter, string> = {
+  all: 'ALL', builtin: 'BUILT-IN', user: 'USER',
+};
+
+const RISK_FILTER_LABELS: RiskFilter[] = ['all', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+
 export default function CorrelationRulesPage() {
   const queryClient = useQueryClient();
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [riskFilter, setRiskFilter] = useState<RiskFilter>('all');
+  const [deletePendingId, setDeletePendingId] = useState<string | null>(null);
   const [editorState, setEditorState] = useState<{
     open: boolean;
     mode: 'view' | 'create' | 'edit';
@@ -32,7 +46,10 @@ export default function CorrelationRulesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (ruleId: string) => deleteCorrelationRule(ruleId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['correlationRules'] }),
+    onSuccess: () => {
+      setDeletePendingId(null);
+      queryClient.invalidateQueries({ queryKey: ['correlationRules'] });
+    },
   });
 
   const filteredRules = rules.filter((r) => {
@@ -43,15 +60,6 @@ export default function CorrelationRulesPage() {
 
   const builtinCount = rules.filter((r) => r.source === 'builtin').length;
   const userCount = rules.filter((r) => r.source === 'user').length;
-
-  const riskColorClass = (risk: string) => {
-    switch (risk) {
-      case 'HIGH': return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-200';
-      case 'MEDIUM': return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-200';
-      case 'LOW': return 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-200';
-      default: return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-200';
-    }
-  };
 
   if (editorState.open) {
     return (
@@ -67,136 +75,196 @@ export default function CorrelationRulesPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div style={{ maxWidth: '1000px' }}>
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '24px' }}>
         <div>
-          <h1 className="text-2xl font-bold">Correlation Rules</h1>
-          <p className="mt-1 text-sm text-[var(--sf-text-muted)]">
-            {rules.length} rules ({builtinCount} built-in, {userCount} user-defined)
+          <div style={{ fontSize: '9px', letterSpacing: '0.2em', color: '#52525B', marginBottom: '4px' }}>
+            THREAT INTELLIGENCE
+          </div>
+          <h1 style={{ fontSize: '20px', fontWeight: 700, color: '#F4F4F5', letterSpacing: '0.05em' }}>
+            CORRELATION RULES
+          </h1>
+          <p style={{ marginTop: '4px', fontSize: '10px', color: '#52525B', letterSpacing: '0.05em' }}>
+            {rules.length} RULES — {builtinCount} BUILT-IN / {userCount} USER-DEFINED
           </p>
         </div>
         <button
           onClick={() => setEditorState({ open: true, mode: 'create' })}
-          className="rounded-md bg-[var(--sf-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+          style={{
+            background: '#00B4FF', color: '#000', padding: '8px 16px',
+            borderRadius: '2px', fontSize: '11px', fontWeight: 700,
+            letterSpacing: '0.12em', border: 'none', cursor: 'pointer',
+          }}
         >
-          + New Rule
+          + NEW RULE
         </button>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-4">
-        <div className="flex gap-1">
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+        {/* Source filter */}
+        <div style={{ display: 'flex', gap: '2px', background: '#060A0F', padding: '3px', border: '1px solid #18181B', borderRadius: '2px' }}>
           {(['all', 'builtin', 'user'] as SourceFilter[]).map((f) => (
             <button
               key={f}
               onClick={() => setSourceFilter(f)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                sourceFilter === f
-                  ? 'bg-[var(--sf-primary)] text-white'
-                  : 'bg-[var(--sf-bg-secondary)] text-[var(--sf-text-muted)] hover:text-[var(--sf-text)]'
-              }`}
+              style={{
+                padding: '5px 12px', background: sourceFilter === f ? '#00B4FF' : 'transparent',
+                color: sourceFilter === f ? '#000' : '#52525B', border: 'none', borderRadius: '2px',
+                fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em', cursor: 'pointer',
+              }}
             >
-              {f === 'all' ? 'All' : f === 'builtin' ? 'Built-in' : 'User'}
+              {SOURCE_LABELS[f]}
             </button>
           ))}
         </div>
-        <select
-          value={riskFilter}
-          onChange={(e) => setRiskFilter(e.target.value as RiskFilter)}
-          className="rounded-md border border-[var(--sf-border)] bg-[var(--sf-bg)] px-3 py-1.5 text-xs"
-        >
-          <option value="all">All risks</option>
-          <option value="HIGH">HIGH</option>
-          <option value="MEDIUM">MEDIUM</option>
-          <option value="LOW">LOW</option>
-          <option value="INFO">INFO</option>
-        </select>
+
+        {/* Risk filter */}
+        <div style={{ display: 'flex', gap: '2px', background: '#060A0F', padding: '3px', border: '1px solid #18181B', borderRadius: '2px' }}>
+          {RISK_FILTER_LABELS.map((f) => {
+            const c = f !== 'all' ? RISK_COLORS[f] : null;
+            return (
+              <button
+                key={f}
+                onClick={() => setRiskFilter(f)}
+                style={{
+                  padding: '5px 10px',
+                  background: riskFilter === f ? (c ? c.label : '#00B4FF') : 'transparent',
+                  color: riskFilter === f ? '#000' : (c ? c.label : '#52525B'),
+                  border: 'none', borderRadius: '2px',
+                  fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em', cursor: 'pointer',
+                }}
+              >
+                {f === 'all' ? 'ALL RISK' : f}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Rules list */}
       {isLoading ? (
-        <div className="flex items-center justify-center py-12">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--sf-primary)] border-t-transparent" />
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
+          <div style={{ width: '32px', height: '32px', borderRadius: '50%', border: '2px solid #00B4FF30', borderTopColor: '#00B4FF', animation: 'sf-spin 1.2s linear infinite' }} />
         </div>
       ) : filteredRules.length === 0 ? (
-        <p className="py-8 text-center text-[var(--sf-text-muted)]">
-          {rules.length === 0 ? 'No correlation rules found.' : 'No rules match the current filters.'}
-        </p>
+        <div style={{ textAlign: 'center', padding: '48px 0', fontSize: '9px', letterSpacing: '0.2em', color: '#3F3F46' }}>
+          {rules.length === 0 ? 'NO CORRELATION RULES FOUND' : 'NO RULES MATCH CURRENT FILTERS'}
+        </div>
       ) : (
-        <div className="space-y-2">
-          {filteredRules.map((rule) => (
-            <div
-              key={rule.rule_id}
-              className="flex items-center gap-3 rounded-lg border border-[var(--sf-border)] p-3 transition-colors hover:bg-[var(--sf-bg-secondary)]"
-            >
-              {/* Risk badge */}
-              <span className={`shrink-0 rounded px-2 py-0.5 text-xs font-medium ${riskColorClass(rule.risk)}`}>
-                {rule.risk}
-              </span>
-
-              {/* Name + description (clickable) */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          {filteredRules.map((rule) => {
+            const c = RISK_COLORS[rule.risk] || RISK_COLORS.INFO;
+            return (
               <div
-                className="min-w-0 flex-1 cursor-pointer"
-                onClick={() => setEditorState({
-                  open: true,
-                  mode: rule.source === 'user' ? 'edit' : 'view',
-                  ruleId: rule.rule_id,
-                })}
+                key={rule.rule_id}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '12px',
+                  padding: '12px 16px', background: '#0A0E14',
+                  border: '1px solid #18181B',
+                  borderLeft: `3px solid ${rule.enabled !== false ? c.border : '#27272A'}`,
+                  opacity: rule.enabled === false ? 0.5 : 1,
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#0D1117')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = '#0A0E14')}
               >
-                <div className="truncate font-medium">{rule.name}</div>
-                {rule.description && (
-                  <div className="mt-0.5 truncate text-xs text-[var(--sf-text-muted)]">{rule.description}</div>
+                {/* Risk badge */}
+                <span style={{
+                  background: c.bg, color: c.label, border: `1px solid ${c.border}40`,
+                  borderRadius: '2px', padding: '2px 7px', fontSize: '9px',
+                  fontWeight: 700, letterSpacing: '0.08em', flexShrink: 0,
+                }}>
+                  {rule.risk}
+                </span>
+
+                {/* Name + description */}
+                <div
+                  style={{ flex: 1, minWidth: 0, cursor: 'pointer' }}
+                  onClick={() => setEditorState({
+                    open: true,
+                    mode: rule.source === 'user' ? 'edit' : 'view',
+                    ruleId: rule.rule_id,
+                  })}
+                >
+                  <div style={{ fontSize: '12px', color: '#F4F4F5', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {rule.name}
+                  </div>
+                  {rule.description && (
+                    <div style={{ fontSize: '10px', color: '#52525B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
+                      {rule.description}
+                    </div>
+                  )}
+                </div>
+
+                {/* Source badge */}
+                <span style={{
+                  flexShrink: 0, borderRadius: '2px', padding: '2px 7px', fontSize: '9px',
+                  fontWeight: 700, letterSpacing: '0.08em',
+                  ...(rule.source === 'user'
+                    ? { background: '#001A08', color: '#32D74B', border: '1px solid #32D74B40' }
+                    : { background: '#0D1117', color: '#52525B', border: '1px solid #27272A' }),
+                }}>
+                  {rule.source.toUpperCase()}
+                </span>
+
+                {/* Toggle + delete for user rules */}
+                {rule.source === 'user' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+                    {/* Toggle */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleMutation.mutate(rule.rule_id); }}
+                      title={rule.enabled ? 'Disable rule' : 'Enable rule'}
+                      style={{
+                        position: 'relative', width: '32px', height: '18px', borderRadius: '9px',
+                        background: rule.enabled ? '#00B4FF' : '#27272A',
+                        border: 'none', cursor: 'pointer', transition: 'background 0.15s',
+                      }}
+                    >
+                      <span style={{
+                        position: 'absolute', top: '2px', left: rule.enabled ? '16px' : '2px',
+                        width: '14px', height: '14px', borderRadius: '50%',
+                        background: '#fff', transition: 'left 0.15s',
+                      }} />
+                    </button>
+
+                    {/* Delete */}
+                    {deletePendingId === rule.rule_id ? (
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(rule.rule_id); }}
+                          style={{ background: '#280A08', color: '#FF3B30', border: '1px solid #FF3B3040', padding: '3px 8px', borderRadius: '2px', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}
+                        >
+                          DEL
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setDeletePendingId(null); }}
+                          style={{ background: 'none', color: '#52525B', border: '1px solid #27272A', padding: '3px 6px', borderRadius: '2px', fontSize: '9px', cursor: 'pointer' }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeletePendingId(rule.rule_id); }}
+                        title="Delete rule"
+                        style={{
+                          background: 'none', color: '#52525B', border: '1px solid #27272A',
+                          width: '24px', height: '24px', borderRadius: '2px',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          cursor: 'pointer', fontSize: '12px',
+                        }}
+                        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#FF3B30'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#FF3B3040'; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#52525B'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#27272A'; }}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
-
-              {/* Source badge */}
-              <span className={`shrink-0 rounded px-2 py-0.5 text-xs ${
-                rule.source === 'user'
-                  ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-200'
-                  : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
-              }`}>
-                {rule.source}
-              </span>
-
-              {/* Actions for user rules */}
-              {rule.source === 'user' && (
-                <div className="flex shrink-0 items-center gap-2">
-                  {/* Enable/disable toggle */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleMutation.mutate(rule.rule_id);
-                    }}
-                    className={`relative h-5 w-9 rounded-full transition-colors ${
-                      rule.enabled ? 'bg-[var(--sf-primary)]' : 'bg-gray-300 dark:bg-gray-600'
-                    }`}
-                    title={rule.enabled ? 'Disable rule' : 'Enable rule'}
-                  >
-                    <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-                      rule.enabled ? 'left-[18px]' : 'left-0.5'
-                    }`} />
-                  </button>
-
-                  {/* Delete button */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (confirm(`Delete rule "${rule.name}"?`)) {
-                        deleteMutation.mutate(rule.rule_id);
-                      }
-                    }}
-                    className="rounded p-1 text-[var(--sf-text-muted)] hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30"
-                    title="Delete rule"
-                  >
-                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

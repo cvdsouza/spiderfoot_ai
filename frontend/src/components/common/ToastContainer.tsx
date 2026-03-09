@@ -1,61 +1,52 @@
 import { useToastStore } from '../../stores/toastStore';
 import type { ToastType } from '../../stores/toastStore';
 
-function ToastIcon({ type }: { type: ToastType }) {
-  if (type === 'success') return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 shrink-0 text-green-500">
-      <path d="M20 6 9 17l-5-5" />
-    </svg>
-  );
-  if (type === 'error') return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 shrink-0 text-red-500">
-      <circle cx="12" cy="12" r="10" /><path d="m15 9-6 6M9 9l6 6" />
-    </svg>
-  );
-  if (type === 'warning') return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 shrink-0 text-yellow-500">
-      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
-      <path d="M12 9v4M12 17h.01" />
-    </svg>
-  );
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 shrink-0 text-blue-500">
-      <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" />
-    </svg>
-  );
-}
-
-const BORDER_COLOR: Record<ToastType, string> = {
-  success: 'border-green-500/30',
-  error:   'border-red-500/30',
-  warning: 'border-yellow-500/30',
-  info:    'border-blue-500/30',
+const TOAST_CFG: Record<ToastType, { color: string; bg: string; border: string; icon: string }> = {
+  success: { color: '#32D74B', bg: '#001A08', border: '#32D74B30', icon: '✓' },
+  error:   { color: '#FF3B30', bg: '#280A08', border: '#FF3B3030', icon: '✕' },
+  warning: { color: '#FF9F0A', bg: '#271500', border: '#FF9F0A30', icon: '⚠' },
+  info:    { color: '#00B4FF', bg: '#001828', border: '#00B4FF30', icon: '◈' },
 };
 
 export default function ToastContainer() {
   const { toasts, remove } = useToastStore();
-
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none">
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          className={`pointer-events-auto flex items-center gap-2.5 rounded-lg border bg-[var(--sf-bg-card)] px-4 py-3 shadow-lg text-sm text-[var(--sf-text)] min-w-64 max-w-sm ${BORDER_COLOR[t.type]}`}
-        >
-          <ToastIcon type={t.type} />
-          <span className="flex-1">{t.message}</span>
-          <button
-            onClick={() => remove(t.id)}
-            className="ml-2 shrink-0 text-[var(--sf-text-muted)] hover:text-[var(--sf-text)]"
+    <div style={{ position: 'fixed', bottom: '16px', right: '16px', zIndex: 9999, display: 'flex', flexDirection: 'column', gap: '6px', pointerEvents: 'none' }}>
+      {toasts.map((t) => {
+        const cfg = TOAST_CFG[t.type];
+        return (
+          <div
+            key={t.id}
+            style={{
+              pointerEvents: 'all',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              minWidth: '260px',
+              maxWidth: '380px',
+              padding: '10px 12px',
+              background: cfg.bg,
+              border: `1px solid ${cfg.border}`,
+              borderLeft: `2px solid ${cfg.color}`,
+              borderRadius: '2px',
+              animation: 'sf-slide 0.2s ease',
+            }}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-      ))}
+            <span style={{ fontSize: '11px', color: cfg.color, flexShrink: 0 }}>{cfg.icon}</span>
+            <span style={{ flex: 1, fontSize: '10px', color: '#E4E4E7', letterSpacing: '0.02em', lineHeight: 1.4 }}>{t.message}</span>
+            <button
+              onClick={() => remove(t.id)}
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#3F3F46', flexShrink: 0, fontSize: '11px', padding: '0 2px', lineHeight: 1 }}
+              onMouseEnter={e => (e.currentTarget.style.color = '#71717A')}
+              onMouseLeave={e => (e.currentTarget.style.color = '#3F3F46')}
+            >
+              ✕
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }

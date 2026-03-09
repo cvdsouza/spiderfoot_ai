@@ -3,11 +3,11 @@
 # Workers execute scans and publish results to RabbitMQ. The API server
 # consumes results from RabbitMQ and writes them to the database.
 #
-# Workers do NOT require direct database access or shared filesystem (NFS).
-# They only need:
+# Workers require:
 #   - RabbitMQ connection (RABBITMQ_URL)
 #   - CA certificate for TLS (RABBITMQ_CA_CERT_HOST)
 #   - API server URL for heartbeats (SPIDERFOOT_API_URL)
+#   - PostgreSQL connection (DATABASE_URL) for scan config and status
 #
 # Works in two modes (selected automatically by worker/start.sh):
 #
@@ -37,6 +37,7 @@ services:
       RABBITMQ_CA_CERT: "/etc/rabbitmq/certs/ca.crt"
       SPIDERFOOT_WORKER_NAME: "${SPIDERFOOT_WORKER_NAME:-worker-fast-1}"
       SPIDERFOOT_API_URL: "${SPIDERFOOT_API_URL:-http://spiderfoot:5001}"
+      DATABASE_URL: "${DATABASE_URL:-postgresql://spiderfoot:spiderfoot@postgres:5432/spiderfoot}"
     networks:
       - default
     restart: unless-stopped
@@ -57,6 +58,7 @@ services:
       RABBITMQ_CA_CERT: "/etc/rabbitmq/certs/ca.crt"
       SPIDERFOOT_WORKER_NAME: "${SPIDERFOOT_WORKER_NAME:-worker-slow-1}"
       SPIDERFOOT_API_URL: "${SPIDERFOOT_API_URL:-http://spiderfoot:5001}"
+      DATABASE_URL: "${DATABASE_URL:-postgresql://spiderfoot:spiderfoot@postgres:5432/spiderfoot}"
     networks:
       - default
     restart: unless-stopped

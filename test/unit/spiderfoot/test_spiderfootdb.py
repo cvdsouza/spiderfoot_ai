@@ -13,9 +13,10 @@ class TestSpiderFootDb(unittest.TestCase):
 
     def test_init_argument_opts_of_invalid_type_should_raise_TypeError(self):
         """
-        Test __init__(self, opts, init=False)
+        Test __init__(self, opts, init=False) — non-dict opts raises TypeError.
+        Note: None is valid (means "use DATABASE_URL env var"); only non-dict non-None values raise.
         """
-        invalid_types = [None, "", list(), int()]
+        invalid_types = ["", list(), int()]
         for invalid_type in invalid_types:
             with self.subTest(invalid_type=invalid_type):
                 with self.assertRaises(TypeError):
@@ -23,19 +24,29 @@ class TestSpiderFootDb(unittest.TestCase):
 
     def test_init_argument_opts_with_empty_value_should_raise_ValueError(self):
         """
-        Test __init__(self, opts, init=False)
+        Test __init__(self, opts, init=False) — empty opts dict with no DATABASE_URL raises ValueError.
         """
-        with self.assertRaises(ValueError):
-            SpiderFootDb(dict())
+        import os
+        saved = os.environ.pop('DATABASE_URL', None)
+        try:
+            with self.assertRaises(ValueError):
+                SpiderFootDb(dict())
+        finally:
+            if saved is not None:
+                os.environ['DATABASE_URL'] = saved
 
-    def test_init_argument_opts_with_empty_key___database_value_should_raise_ValueError(self):
+    def test_init_argument_opts_with_no_database_url_should_raise_ValueError(self):
         """
-        Test __init__(self, opts, init=False)
+        Test __init__(self, opts, init=False) — PostgreSQL requires __database_url or DATABASE_URL env var.
         """
-        with self.assertRaises(ValueError):
-            opts = dict()
-            opts['__database'] = None
-            SpiderFootDb(opts)
+        import os
+        saved = os.environ.pop('DATABASE_URL', None)
+        try:
+            with self.assertRaises(ValueError):
+                SpiderFootDb({'__some_key': 'value'})
+        finally:
+            if saved is not None:
+                os.environ['DATABASE_URL'] = saved
 
     def test_init_should_create_SpiderFootDb_object(self):
         """
@@ -1281,3 +1292,19 @@ class TestSpiderFootDb(unittest.TestCase):
             with self.subTest(invalid_type=invalid_type):
                 with self.assertRaises(TypeError):
                     sfdb.correlationResultCreate("", "", "", "", "", "", invalid_type, [])
+
+    def test_configSet_upsert_on_conflict(self):
+        """ON CONFLICT DO UPDATE replaces REPLACE INTO — second write wins."""
+        sfdb = SpiderFootDb(self.default_options, init=True)
+        sfdb.configSet({'CoreSettings:test_key': 'value1'})
+        sfdb.configSet({'CoreSettings:test_key': 'value2'})
+        cfg = sfdb.configGet()
+        self.assertIn('CoreSettings:test_key', cfg)
+        self.assertEqual(cfg['CoreSettings:test_key'], 'value2')
+
+    def test_search_regex_operator(self):
+        """search() uses PostgreSQL ~* operator (case-insensitive regex), not SQLite REGEXP."""
+        sfdb = SpiderFootDb(self.default_options, init=True)
+        results = sfdb.search({'scan_id': 'nonexistent-scan-id', 'regex': 'test.*'}, False)
+        self.assertIsInstance(results, list)
+        self.assertFalse(results)

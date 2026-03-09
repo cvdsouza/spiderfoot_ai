@@ -6,10 +6,8 @@ import { usePermission } from '../../hooks/usePermission';
 import api from '../../api/client';
 import type { ScanListRow, RiskMatrix } from '../../types';
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
 const ACTIVE_STATUSES = new Set(['RUNNING', 'STARTING', 'STARTED', 'INITIALIZING']);
-const RISK_COLORS = { HIGH: '#ef4444', MEDIUM: '#f59e0b', LOW: '#22c55e', INFO: '#06b6d4' };
+const RISK_COLORS = { HIGH: '#FF3B30', MEDIUM: '#FF9F0A', LOW: '#FFD60A', INFO: '#00B4FF' };
 
 function sumRisk(scans: ScanListRow[]): RiskMatrix {
   return scans.reduce(
@@ -25,36 +23,51 @@ function relativeTime(dateStr: string): string {
   if (!dateStr || dateStr === 'Not yet') return '—';
   const diff = Date.now() - new Date(dateStr).getTime();
   const m = Math.floor(diff / 60000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
+  if (m < 1) return 'JUST NOW';
+  if (m < 60) return `${m}M AGO`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
+  if (h < 24) return `${h}H AGO`;
+  return `${Math.floor(h / 24)}D AGO`;
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────────────
-
+// ── Stat Card ─────────────────────────────────────────────────────────────────
 function StatCard({ label, value, color, sub }: { label: string; value: number | string; color?: string; sub?: string }) {
   return (
-    <div className="bg-[var(--sf-bg-card)] border border-[var(--sf-border)] rounded-xl p-5">
-      <div className="text-xs font-semibold uppercase tracking-wider text-[var(--sf-text-muted)] mb-1">{label}</div>
-      <div className={`text-3xl font-bold ${color ?? 'text-[var(--sf-text)]'}`}>{value}</div>
-      {sub && <div className="text-xs text-[var(--sf-text-muted)] mt-1">{sub}</div>}
+    <div style={{
+      background: 'var(--sf-bg-card)',
+      border: '1px solid var(--sf-border)',
+      borderRadius: '3px',
+      padding: '16px 18px',
+    }}>
+      <div style={{ fontSize: '7px', fontWeight: 700, letterSpacing: '0.2em', color: 'var(--sf-text-faint)', marginBottom: '8px' }}>{label}</div>
+      <div style={{ fontSize: '28px', fontWeight: 700, color: color ?? 'var(--sf-text)', lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontSize: '8px', color: 'var(--sf-text-dim)', marginTop: '5px', letterSpacing: '0.06em' }}>{sub.toUpperCase()}</div>}
     </div>
   );
 }
 
+// ── Status dot ────────────────────────────────────────────────────────────────
 function StatusDot({ status }: { status: string }) {
   const color =
-    status === 'FINISHED' ? 'bg-green-400' :
-    ACTIVE_STATUSES.has(status) ? 'bg-blue-400 animate-pulse' :
-    status === 'ABORTED' || status === 'ABORT-REQUESTED' ? 'bg-orange-400' :
-    'bg-red-400';
-  return <span className={`inline-block w-2 h-2 rounded-full ${color}`} />;
+    status === 'FINISHED' ? '#32D74B' :
+    ACTIVE_STATUSES.has(status) ? '#00B4FF' :
+    status === 'ABORTED' || status === 'ABORT-REQUESTED' ? '#FF9F0A' :
+    '#FF3B30';
+  const isLive = ACTIVE_STATUSES.has(status);
+  return (
+    <span style={{
+      display: 'inline-block',
+      width: '6px', height: '6px',
+      borderRadius: '50%',
+      background: color,
+      boxShadow: isLive ? `0 0 5px ${color}` : 'none',
+      animation: isLive ? 'sf-blink 0.8s infinite' : 'none',
+      flexShrink: 0,
+    }} />
+  );
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
-
 export default function Welcome() {
   const user = useAuthStore((s) => s.user);
   const canCreateScan = usePermission('scans', 'create');
@@ -65,19 +78,16 @@ export default function Welcome() {
     refetchInterval: 10000,
   });
 
-  // Derived stats
   const totalScans = scans.length;
   const runningScans = scans.filter((s) => ACTIVE_STATUSES.has(s[6]));
   const finishedScans = scans.filter((s) => s[6] === 'FINISHED').length;
   const risk = sumRisk(scans);
   const totalFindings = risk.HIGH + risk.MEDIUM + risk.LOW + risk.INFO;
 
-  // Risk donut data (only include non-zero slices)
   const riskData = (Object.entries(risk) as [keyof RiskMatrix, number][])
     .filter(([, v]) => v > 0)
     .map(([k, v]) => ({ name: k, value: v, color: RISK_COLORS[k] }));
 
-  // Scan status breakdown for bar chart
   const statusCounts = scans.reduce<Record<string, number>>((acc, s) => {
     const grp =
       s[6] === 'FINISHED' ? 'Finished' :
@@ -88,129 +98,146 @@ export default function Welcome() {
     return acc;
   }, {});
   const barData = Object.entries(statusCounts).map(([name, count]) => ({ name, count }));
-
   const recentScans = [...scans].slice(0, 8);
 
+  const sectionHeader = (title: string, sub?: string) => (
+    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '12px' }}>
+      <div style={{ fontSize: '8px', fontWeight: 700, letterSpacing: '0.2em', color: 'var(--sf-text-dim)' }}>{title}</div>
+      {sub && <span style={{ fontSize: '8px', color: 'var(--sf-text-faint)', letterSpacing: '0.06em' }}>{sub}</span>}
+    </div>
+  );
+
   return (
-    <div className="space-y-6">
-      {/* Greeting */}
-      <div className="flex items-center justify-between">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div>
-          <p className="text-[var(--sf-text-muted)] text-sm">
-            Welcome back, <span className="text-[var(--sf-text)] font-medium">{user?.display_name || user?.username}</span>
-          </p>
+          <div style={{ fontSize: '9px', color: 'var(--sf-text-faint)', letterSpacing: '0.15em', marginBottom: '3px' }}>
+            OPERATOR
+          </div>
+          <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--sf-text)', letterSpacing: '0.1em' }}>
+            {(user?.display_name || user?.username || '').toUpperCase()}
+          </div>
         </div>
         {canCreateScan && (
           <Link
             to="/newscan"
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--sf-primary)] text-white text-sm font-medium hover:bg-[var(--sf-primary-hover)] transition-colors"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '6px',
+              padding: '8px 16px',
+              background: 'rgba(0,180,255,0.08)',
+              border: '1px solid var(--sf-primary)',
+              borderRadius: '2px',
+              color: 'var(--sf-primary)',
+              fontSize: '9px', fontWeight: 700, letterSpacing: '0.14em',
+              textDecoration: 'none',
+              transition: 'background 0.15s',
+            }}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-4 h-4">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-            New Scan
+            + NEW SCAN
           </Link>
         )}
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Scans" value={totalScans} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px' }}>
+        <StatCard label="TOTAL SCANS" value={totalScans} />
         <StatCard
-          label="Running"
+          label="ACTIVE"
           value={runningScans.length}
-          color={runningScans.length > 0 ? 'text-blue-400' : 'text-[var(--sf-text)]'}
-          sub={runningScans.length > 0 ? 'active now' : 'none active'}
+          color={runningScans.length > 0 ? '#00B4FF' : 'var(--sf-text)'}
+          sub={runningScans.length > 0 ? '● LIVE' : 'IDLE'}
         />
-        <StatCard label="Finished" value={finishedScans} color="text-green-400" />
+        <StatCard label="COMPLETE" value={finishedScans} color="#32D74B" />
         <StatCard
-          label="Total Findings"
+          label="TOTAL FINDINGS"
           value={totalFindings.toLocaleString()}
-          sub={risk.HIGH > 0 ? `${risk.HIGH} HIGH` : undefined}
-          color={risk.HIGH > 0 ? 'text-red-400' : 'text-[var(--sf-text)]'}
+          sub={risk.HIGH > 0 ? `${risk.HIGH} HIGH RISK` : 'NO HIGH RISK'}
+          color={risk.HIGH > 0 ? '#FF3B30' : 'var(--sf-text)'}
         />
       </div>
 
-      {/* Charts row */}
+      {/* Charts */}
       {totalScans > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Risk distribution donut */}
-          <div className="bg-[var(--sf-bg-card)] border border-[var(--sf-border)] rounded-xl p-5">
-            <h2 className="text-sm font-semibold text-[var(--sf-text)] mb-4">Risk Distribution</h2>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+          {/* Risk donut */}
+          <div style={{ background: 'var(--sf-bg-card)', border: '1px solid var(--sf-border)', borderRadius: '3px', padding: '16px 18px' }}>
+            {sectionHeader('RISK DISTRIBUTION')}
             {totalFindings > 0 ? (
-              <div className="flex items-center gap-6">
-                <ResponsiveContainer width={160} height={160}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                <ResponsiveContainer width={140} height={140}>
                   <PieChart>
-                    <Pie data={riskData} cx="50%" cy="50%" innerRadius={48} outerRadius={72} dataKey="value" strokeWidth={0}>
-                      {riskData.map((entry, i) => (
-                        <Cell key={i} fill={entry.color} />
-                      ))}
+                    <Pie data={riskData} cx="50%" cy="50%" innerRadius={42} outerRadius={64} dataKey="value" strokeWidth={0}>
+                      {riskData.map((entry, i) => <Cell key={i} fill={entry.color} />)}
                     </Pie>
                     <Tooltip
-                      contentStyle={{ background: 'var(--sf-bg-card)', border: '1px solid var(--sf-border)', borderRadius: 8, fontSize: 12, color: 'var(--sf-text)' }}
+                      contentStyle={{ background: 'var(--sf-bg-card)', border: '1px solid var(--sf-border)', borderRadius: 2, fontSize: 10, color: 'var(--sf-text)', fontFamily: 'inherit' }}
                       formatter={(value) => [(value ?? 0).toLocaleString()]}
                     />
                   </PieChart>
                 </ResponsiveContainer>
-                <div className="space-y-2">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {(Object.entries(RISK_COLORS) as [keyof RiskMatrix, string][]).map(([level, color]) => (
-                    <div key={level} className="flex items-center gap-2 text-sm">
-                      <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: color }} />
-                      <span className="text-[var(--sf-text-muted)] w-14">{level}</span>
-                      <span className="font-semibold text-[var(--sf-text)]">{risk[level].toLocaleString()}</span>
+                    <div key={level} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '1px', background: color, flexShrink: 0 }} />
+                      <span style={{ fontSize: '8px', color: 'var(--sf-text-dim)', width: '48px', letterSpacing: '0.06em' }}>{level}</span>
+                      <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--sf-text)' }}>{risk[level].toLocaleString()}</span>
                     </div>
                   ))}
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-[var(--sf-text-muted)]">No findings yet.</p>
+              <p style={{ fontSize: '9px', color: 'var(--sf-text-faint)' }}>NO FINDINGS YET</p>
             )}
           </div>
 
-          {/* Scan status bar chart */}
-          <div className="bg-[var(--sf-bg-card)] border border-[var(--sf-border)] rounded-xl p-5">
-            <h2 className="text-sm font-semibold text-[var(--sf-text)] mb-4">Scans by Status</h2>
+          {/* Status bar chart */}
+          <div style={{ background: 'var(--sf-bg-card)', border: '1px solid var(--sf-border)', borderRadius: '3px', padding: '16px 18px' }}>
+            {sectionHeader('SCANS BY STATUS')}
             {barData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={160}>
-                <BarChart data={barData} layout="vertical" margin={{ left: 8, right: 16, top: 4, bottom: 4 }}>
+              <ResponsiveContainer width="100%" height={140}>
+                <BarChart data={barData} layout="vertical" margin={{ left: 8, right: 12, top: 4, bottom: 4 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--sf-border)" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 11, fill: 'var(--sf-text-muted)' }} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 12, fill: 'var(--sf-text-muted)' }} axisLine={false} tickLine={false} width={60} />
-                  <Tooltip
-                    contentStyle={{ background: 'var(--sf-bg-card)', border: '1px solid var(--sf-border)', borderRadius: 8, fontSize: 12, color: 'var(--sf-text)' }}
-                    cursor={{ fill: 'var(--sf-border)', opacity: 0.4 }}
-                  />
-                  <Bar dataKey="count" fill="var(--sf-primary)" radius={[0, 4, 4, 0]} />
+                  <XAxis type="number" tick={{ fontSize: 9, fill: 'var(--sf-text-dim)', fontFamily: 'inherit' }} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 9, fill: 'var(--sf-text-dim)', fontFamily: 'inherit' }} axisLine={false} tickLine={false} width={55} />
+                  <Tooltip contentStyle={{ background: 'var(--sf-bg-card)', border: '1px solid var(--sf-border)', borderRadius: 2, fontSize: 10, color: 'var(--sf-text)', fontFamily: 'inherit' }} cursor={{ fill: 'var(--sf-border)', opacity: 0.3 }} />
+                  <Bar dataKey="count" fill="var(--sf-primary)" radius={[0, 2, 2, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <p className="text-sm text-[var(--sf-text-muted)]">No scans yet.</p>
+              <p style={{ fontSize: '9px', color: 'var(--sf-text-faint)' }}>NO SCANS YET</p>
             )}
           </div>
         </div>
       )}
 
-      {/* Running scans */}
+      {/* Active scans */}
       {runningScans.length > 0 && (
-        <div className="bg-[var(--sf-bg-card)] border border-[var(--sf-border)] rounded-xl p-5">
-          <h2 className="text-sm font-semibold text-[var(--sf-text)] mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
-            Active Scans
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div style={{ background: 'var(--sf-bg-card)', border: '1px solid var(--sf-border)', borderTop: '1px solid rgba(0,180,255,0.2)', borderRadius: '3px', padding: '16px 18px' }}>
+          {sectionHeader('ACTIVE SCANS', `${runningScans.length} RUNNING`)}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '8px' }}>
             {runningScans.map((scan) => (
               <Link
                 key={scan[0]}
                 to={`/scaninfo/${scan[0]}`}
-                className="flex flex-col gap-1.5 p-3 rounded-lg border border-[var(--sf-border)] hover:border-[var(--sf-primary)] hover:bg-[var(--sf-bg)] transition-colors"
+                style={{
+                  display: 'flex', flexDirection: 'column', gap: '6px',
+                  padding: '10px 12px',
+                  background: 'var(--sf-bg-elevated)',
+                  border: '1px solid var(--sf-border)',
+                  borderLeft: '2px solid #00B4FF',
+                  borderRadius: '2px',
+                  textDecoration: 'none',
+                  transition: 'border-color 0.15s',
+                }}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-[var(--sf-text)] truncate">{scan[1]}</span>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--sf-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{scan[1]}</span>
                   <StatusDot status={scan[6]} />
                 </div>
-                <div className="text-xs text-[var(--sf-text-muted)] truncate">{scan[2]}</div>
-                <div className="flex items-center justify-between text-xs text-[var(--sf-text-muted)]">
-                  <span>{scan[7].toLocaleString()} events</span>
+                <div style={{ fontSize: '9px', color: 'var(--sf-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>{scan[2]}</div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '8px', color: 'var(--sf-text-faint)', letterSpacing: '0.04em' }}>
+                  <span>{scan[7].toLocaleString()} EVENTS</span>
                   <span>{relativeTime(scan[4])}</span>
                 </div>
               </Link>
@@ -221,20 +248,16 @@ export default function Welcome() {
 
       {/* Recent scans table */}
       {recentScans.length > 0 && (
-        <div className="bg-[var(--sf-bg-card)] border border-[var(--sf-border)] rounded-xl overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--sf-border)]">
-            <h2 className="text-sm font-semibold text-[var(--sf-text)]">Recent Scans</h2>
-            <Link to="/scans" className="text-xs text-[var(--sf-primary)] hover:underline">
-              View all →
-            </Link>
+        <div style={{ background: 'var(--sf-bg-card)', border: '1px solid var(--sf-border)', borderRadius: '3px', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 18px', borderBottom: '1px solid var(--sf-border)' }}>
+            <div style={{ fontSize: '8px', fontWeight: 700, letterSpacing: '0.2em', color: 'var(--sf-text-dim)' }}>RECENT SCANS</div>
+            <Link to="/scans" style={{ fontSize: '8px', color: 'var(--sf-primary)', letterSpacing: '0.08em', textDecoration: 'none' }}>VIEW ALL →</Link>
           </div>
-          <table className="w-full text-sm">
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
-              <tr className="border-b border-[var(--sf-border)]">
-                {['Name', 'Target', 'Status', 'Findings', 'Started'].map((col) => (
-                  <th key={col} className="text-left px-5 py-2.5 text-xs font-semibold text-[var(--sf-text-muted)] uppercase tracking-wider">
-                    {col}
-                  </th>
+              <tr style={{ borderBottom: '1px solid var(--sf-border)' }}>
+                {['NAME', 'TARGET', 'STATUS', 'FINDINGS', 'STARTED'].map((col) => (
+                  <th key={col} style={{ textAlign: 'left', padding: '8px 18px', fontSize: '7px', fontWeight: 700, letterSpacing: '0.2em', color: 'var(--sf-text-faint)' }}>{col}</th>
                 ))}
               </tr>
             </thead>
@@ -243,27 +266,25 @@ export default function Welcome() {
                 const r = scan[8];
                 const findings = r.HIGH + r.MEDIUM + r.LOW + r.INFO;
                 return (
-                  <tr key={scan[0]} className="border-b border-[var(--sf-border)] last:border-0 hover:bg-[var(--sf-bg)] transition-colors">
-                    <td className="px-5 py-3">
-                      <Link to={`/scaninfo/${scan[0]}`} className="text-[var(--sf-primary)] hover:underline font-medium">
+                  <tr key={scan[0]} style={{ borderBottom: '1px solid var(--sf-border)' }}>
+                    <td style={{ padding: '10px 18px' }}>
+                      <Link to={`/scaninfo/${scan[0]}`} style={{ fontSize: '11px', fontWeight: 700, color: 'var(--sf-primary)', textDecoration: 'none', letterSpacing: '0.02em' }}>
                         {scan[1]}
                       </Link>
                     </td>
-                    <td className="px-5 py-3 text-[var(--sf-text-muted)] font-mono text-xs">{scan[2]}</td>
-                    <td className="px-5 py-3">
-                      <span className="inline-flex items-center gap-1.5">
+                    <td style={{ padding: '10px 18px', fontSize: '9px', color: 'var(--sf-text-muted)', fontFamily: 'inherit' }}>{scan[2]}</td>
+                    <td style={{ padding: '10px 18px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                         <StatusDot status={scan[6]} />
-                        <span className="text-xs text-[var(--sf-text-muted)]">{scan[6]}</span>
-                      </span>
+                        <span style={{ fontSize: '8px', color: 'var(--sf-text-dim)', letterSpacing: '0.06em' }}>{scan[6]}</span>
+                      </div>
                     </td>
-                    <td className="px-5 py-3 text-[var(--sf-text-muted)] text-xs">
+                    <td style={{ padding: '10px 18px' }}>
                       {findings > 0 ? (
-                        <span className={r.HIGH > 0 ? 'text-red-400 font-semibold' : ''}>
-                          {findings.toLocaleString()}
-                        </span>
-                      ) : '—'}
+                        <span style={{ fontSize: '10px', fontWeight: 700, color: r.HIGH > 0 ? '#FF3B30' : 'var(--sf-text)' }}>{findings.toLocaleString()}</span>
+                      ) : <span style={{ fontSize: '9px', color: 'var(--sf-text-faint)' }}>—</span>}
                     </td>
-                    <td className="px-5 py-3 text-[var(--sf-text-muted)] text-xs">{relativeTime(scan[4])}</td>
+                    <td style={{ padding: '10px 18px', fontSize: '8px', color: 'var(--sf-text-faint)', letterSpacing: '0.04em' }}>{relativeTime(scan[4])}</td>
                   </tr>
                 );
               })}
@@ -274,16 +295,25 @@ export default function Welcome() {
 
       {/* Empty state */}
       {totalScans === 0 && (
-        <div className="text-center py-20 bg-[var(--sf-bg-card)] border border-[var(--sf-border)] rounded-xl">
-          <div className="text-4xl mb-3">🕷️</div>
-          <h3 className="text-lg font-semibold text-[var(--sf-text)] mb-1">No scans yet</h3>
-          <p className="text-[var(--sf-text-muted)] text-sm mb-6">Run your first scan to start gathering intelligence.</p>
+        <div style={{ textAlign: 'center', padding: '60px 24px', background: 'var(--sf-bg-card)', border: '1px solid var(--sf-border)', borderRadius: '3px' }}>
+          <div style={{ fontSize: '36px', color: 'var(--sf-primary)', marginBottom: '14px', animation: 'sf-glow 3s ease-in-out infinite' }}>⬡</div>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--sf-text)', letterSpacing: '0.15em', marginBottom: '8px' }}>NO SCANS DETECTED</div>
+          <div style={{ fontSize: '9px', color: 'var(--sf-text-muted)', letterSpacing: '0.08em', marginBottom: '24px' }}>INITIATE A SCAN TO BEGIN INTELLIGENCE GATHERING</div>
           {canCreateScan && (
             <Link
               to="/newscan"
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-[var(--sf-primary)] text-white text-sm font-medium hover:bg-[var(--sf-primary-hover)] transition-colors"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px',
+                padding: '10px 20px',
+                background: 'rgba(0,180,255,0.08)',
+                border: '1px solid var(--sf-primary)',
+                borderRadius: '2px',
+                color: 'var(--sf-primary)',
+                fontSize: '9px', fontWeight: 700, letterSpacing: '0.18em',
+                textDecoration: 'none',
+              }}
             >
-              Start a Scan
+              + INITIATE SCAN
             </Link>
           )}
         </div>

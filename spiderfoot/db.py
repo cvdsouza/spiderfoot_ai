@@ -10,192 +10,193 @@
 # Licence:     MIT
 # -------------------------------------------------------------------------------
 
-from pathlib import Path
 import hashlib
 import logging
+import os
 import random
-import re
-import sqlite3
-import threading
 import time
+
+import psycopg2
+import psycopg2.extras
 
 log = logging.getLogger(f"spiderfoot.{__name__}")
 
 
 class SpiderFootDb:
-    """SpiderFoot database
+    """SpiderFoot database — PostgreSQL backend.
 
     Attributes:
-        conn: SQLite connect() connection
-        dbh: SQLite cursor() database handle
-        dbhLock (_thread.RLock): thread lock on database handle
+        conn: psycopg2 connection
+        dbh: psycopg2 cursor (DictCursor)
     """
 
     dbh = None
     conn = None
 
-    # Prevent multithread access to sqlite database
-    dbhLock = threading.RLock()
-
-    # Queries for creating the SpiderFoot database
+    # Schema — PostgreSQL compatible.
+    # All CREATE TABLE / INDEX statements use IF NOT EXISTS so create() is idempotent.
     createSchemaQueries = [
-        "PRAGMA journal_mode=WAL",
-        "CREATE TABLE tbl_event_types ( \
-            event       VARCHAR NOT NULL PRIMARY KEY, \
-            event_descr VARCHAR NOT NULL, \
-            event_raw   INT NOT NULL DEFAULT 0, \
-            event_type  VARCHAR NOT NULL \
-        )",
-        "CREATE TABLE tbl_config ( \
-            scope   VARCHAR NOT NULL, \
-            opt     VARCHAR NOT NULL, \
-            val     VARCHAR NOT NULL, \
-            PRIMARY KEY (scope, opt) \
-        )",
-        "CREATE TABLE tbl_scan_instance ( \
-            guid        VARCHAR NOT NULL PRIMARY KEY, \
-            name        VARCHAR NOT NULL, \
-            seed_target VARCHAR NOT NULL, \
-            created     INT DEFAULT 0, \
-            started     INT DEFAULT 0, \
-            ended       INT DEFAULT 0, \
-            status      VARCHAR NOT NULL \
-        )",
-        "CREATE TABLE tbl_scan_log ( \
-            scan_instance_id    VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid), \
-            generated           INT NOT NULL, \
-            component           VARCHAR, \
-            type                VARCHAR NOT NULL, \
-            message             VARCHAR \
-        )",
-        "CREATE TABLE tbl_scan_config ( \
-            scan_instance_id    VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid), \
-            component           VARCHAR NOT NULL, \
-            opt                 VARCHAR NOT NULL, \
-            val                 VARCHAR NOT NULL \
-        )",
-        "CREATE TABLE tbl_scan_results ( \
-            scan_instance_id    VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid), \
-            hash                VARCHAR NOT NULL, \
-            type                VARCHAR NOT NULL REFERENCES tbl_event_types(event), \
-            generated           INT NOT NULL, \
-            confidence          INT NOT NULL DEFAULT 100, \
-            visibility          INT NOT NULL DEFAULT 100, \
-            risk                INT NOT NULL DEFAULT 0, \
-            module              VARCHAR NOT NULL, \
-            data                VARCHAR, \
-            false_positive      INT NOT NULL DEFAULT 0, \
-            source_event_hash  VARCHAR DEFAULT 'ROOT' \
-        )",
-        "CREATE TABLE tbl_scan_correlation_results ( \
-            id                  VARCHAR NOT NULL PRIMARY KEY, \
-            scan_instance_id    VARCHAR NOT NULL REFERENCES tbl_scan_instances(guid), \
-            title               VARCHAR NOT NULL, \
-            rule_risk           VARCHAR NOT NULL, \
-            rule_id             VARCHAR NOT NULL, \
-            rule_name           VARCHAR NOT NULL, \
-            rule_descr          VARCHAR NOT NULL, \
-            rule_logic          VARCHAR NOT NULL \
-        )",
-        "CREATE TABLE tbl_scan_correlation_results_events ( \
-            correlation_id      VARCHAR NOT NULL REFERENCES tbl_scan_correlation_results(id), \
-            event_hash          VARCHAR NOT NULL REFERENCES tbl_scan_results(hash) \
-        )",
-        "CREATE INDEX idx_scan_results_id ON tbl_scan_results (scan_instance_id)",
-        "CREATE INDEX idx_scan_results_type ON tbl_scan_results (scan_instance_id, type)",
-        "CREATE INDEX idx_scan_results_hash ON tbl_scan_results (scan_instance_id, hash)",
-        "CREATE INDEX idx_scan_results_module ON tbl_scan_results(scan_instance_id, module)",
-        "CREATE INDEX idx_scan_results_srchash ON tbl_scan_results (scan_instance_id, source_event_hash)",
-        "CREATE INDEX idx_scan_logs ON tbl_scan_log (scan_instance_id)",
-        "CREATE INDEX idx_scan_correlation ON tbl_scan_correlation_results (scan_instance_id, id)",
-        "CREATE INDEX idx_scan_correlation_events ON tbl_scan_correlation_results_events (correlation_id)",
-        "CREATE TABLE tbl_scan_ai_analysis ( \
-            id                  VARCHAR NOT NULL PRIMARY KEY, \
-            scan_instance_id    VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid), \
-            provider            VARCHAR NOT NULL, \
-            model               VARCHAR NOT NULL, \
-            mode                VARCHAR NOT NULL, \
-            created             INT DEFAULT 0, \
-            status              VARCHAR NOT NULL DEFAULT 'pending', \
-            result_json         TEXT, \
-            token_usage         INT DEFAULT 0, \
-            error               VARCHAR \
-        )",
-        "CREATE INDEX idx_scan_ai_analysis ON tbl_scan_ai_analysis (scan_instance_id)",
-        "CREATE TABLE tbl_scan_ai_chat ( \
-            id                  VARCHAR NOT NULL PRIMARY KEY, \
-            scan_instance_id    VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid), \
-            role                VARCHAR NOT NULL, \
-            content             TEXT NOT NULL, \
-            token_usage         INT DEFAULT 0, \
-            created             INT NOT NULL \
-        )",
-        "CREATE INDEX idx_scan_ai_chat ON tbl_scan_ai_chat (scan_instance_id, created)",
-        "CREATE TABLE tbl_correlation_rules ( \
-            id              VARCHAR NOT NULL PRIMARY KEY, \
-            rule_id         VARCHAR NOT NULL UNIQUE, \
-            yaml_content    TEXT NOT NULL, \
-            enabled         INT DEFAULT 1, \
-            created         INT NOT NULL, \
-            updated         INT NOT NULL \
-        )",
-        # ── RBAC tables (Phase 10) ──────────────────────────────────────
-        "CREATE TABLE tbl_users ( \
-            id           VARCHAR NOT NULL PRIMARY KEY, \
-            username     VARCHAR NOT NULL UNIQUE, \
-            password     VARCHAR NOT NULL, \
-            display_name VARCHAR NOT NULL DEFAULT '', \
-            email        VARCHAR NOT NULL DEFAULT '', \
-            is_active    INT NOT NULL DEFAULT 1, \
-            created      INT NOT NULL DEFAULT 0, \
-            updated      INT NOT NULL DEFAULT 0 \
-        )",
-        "CREATE TABLE tbl_roles ( \
-            id          VARCHAR NOT NULL PRIMARY KEY, \
-            name        VARCHAR NOT NULL UNIQUE, \
-            description VARCHAR NOT NULL DEFAULT '' \
-        )",
-        "CREATE TABLE tbl_permissions ( \
-            id       VARCHAR NOT NULL PRIMARY KEY, \
-            resource VARCHAR NOT NULL, \
-            action   VARCHAR NOT NULL, \
-            UNIQUE(resource, action) \
-        )",
-        "CREATE TABLE tbl_user_roles ( \
-            user_id VARCHAR NOT NULL, \
-            role_id VARCHAR NOT NULL, \
-            PRIMARY KEY (user_id, role_id) \
-        )",
-        "CREATE TABLE tbl_role_permissions ( \
-            role_id       VARCHAR NOT NULL, \
-            permission_id VARCHAR NOT NULL, \
-            PRIMARY KEY (role_id, permission_id) \
-        )",
-        "CREATE TABLE tbl_audit_log ( \
-            id          VARCHAR NOT NULL PRIMARY KEY, \
-            user_id     VARCHAR NOT NULL, \
-            username    VARCHAR NOT NULL, \
-            action      VARCHAR NOT NULL, \
-            resource    VARCHAR NOT NULL, \
-            resource_id VARCHAR NOT NULL DEFAULT '', \
-            details     VARCHAR NOT NULL DEFAULT '', \
-            ip_address  VARCHAR NOT NULL DEFAULT '', \
-            created     INT NOT NULL DEFAULT 0 \
-        )",
-        "CREATE INDEX idx_audit_log_user ON tbl_audit_log (user_id)",
-        "CREATE INDEX idx_audit_log_created ON tbl_audit_log (created)",
-        # ── Worker registry (Phase 11) ───────────────────────────────────
-        "CREATE TABLE tbl_workers ( \
-            id           VARCHAR NOT NULL PRIMARY KEY, \
-            name         VARCHAR NOT NULL, \
-            host         VARCHAR NOT NULL, \
-            queue_type   VARCHAR NOT NULL DEFAULT 'fast', \
-            status       VARCHAR NOT NULL DEFAULT 'idle', \
-            current_scan VARCHAR NOT NULL DEFAULT '', \
-            last_seen    INT NOT NULL DEFAULT 0, \
-            registered   INT NOT NULL DEFAULT 0 \
-        )",
-        "CREATE INDEX idx_workers_status ON tbl_workers (status)",
+        # ── Core scan tables ──────────────────────────────────────────────
+        """CREATE TABLE IF NOT EXISTS tbl_event_types (
+            event       VARCHAR NOT NULL PRIMARY KEY,
+            event_descr VARCHAR NOT NULL,
+            event_raw   INT NOT NULL DEFAULT 0,
+            event_type  VARCHAR NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_config (
+            scope   VARCHAR NOT NULL,
+            opt     VARCHAR NOT NULL,
+            val     VARCHAR NOT NULL,
+            PRIMARY KEY (scope, opt)
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_scan_instance (
+            guid        VARCHAR NOT NULL PRIMARY KEY,
+            name        VARCHAR NOT NULL,
+            seed_target VARCHAR NOT NULL,
+            created     BIGINT DEFAULT 0,
+            started     BIGINT DEFAULT 0,
+            ended       BIGINT DEFAULT 0,
+            status      VARCHAR NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_scan_log (
+            id               BIGSERIAL PRIMARY KEY,
+            scan_instance_id VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid) ON DELETE CASCADE,
+            generated        BIGINT NOT NULL,
+            component        VARCHAR,
+            type             VARCHAR NOT NULL,
+            message          VARCHAR
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_scan_config (
+            scan_instance_id VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid) ON DELETE CASCADE,
+            component        VARCHAR NOT NULL,
+            opt              VARCHAR NOT NULL,
+            val              VARCHAR NOT NULL,
+            UNIQUE (scan_instance_id, component, opt)
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_scan_results (
+            scan_instance_id   VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid) ON DELETE CASCADE,
+            hash               VARCHAR NOT NULL,
+            type               VARCHAR NOT NULL REFERENCES tbl_event_types(event),
+            generated          DOUBLE PRECISION NOT NULL,
+            confidence         INT NOT NULL DEFAULT 100,
+            visibility         INT NOT NULL DEFAULT 100,
+            risk               INT NOT NULL DEFAULT 0,
+            module             VARCHAR NOT NULL,
+            data               TEXT,
+            false_positive     INT NOT NULL DEFAULT 0,
+            source_event_hash  VARCHAR DEFAULT 'ROOT'
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_scan_correlation_results (
+            id               VARCHAR NOT NULL PRIMARY KEY,
+            scan_instance_id VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid) ON DELETE CASCADE,
+            title            VARCHAR NOT NULL,
+            rule_risk        VARCHAR NOT NULL,
+            rule_id          VARCHAR NOT NULL,
+            rule_name        VARCHAR NOT NULL,
+            rule_descr       VARCHAR NOT NULL,
+            rule_logic       VARCHAR NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_scan_correlation_results_events (
+            correlation_id VARCHAR NOT NULL REFERENCES tbl_scan_correlation_results(id) ON DELETE CASCADE,
+            event_hash     VARCHAR NOT NULL
+        )""",
+        # ── Indices ───────────────────────────────────────────────────────
+        "CREATE INDEX IF NOT EXISTS idx_scan_results_id     ON tbl_scan_results (scan_instance_id)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_results_type   ON tbl_scan_results (scan_instance_id, type)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_results_hash   ON tbl_scan_results (scan_instance_id, hash)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_results_module ON tbl_scan_results (scan_instance_id, module)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_results_srchash ON tbl_scan_results (scan_instance_id, source_event_hash)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_logs           ON tbl_scan_log (scan_instance_id)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_correlation    ON tbl_scan_correlation_results (scan_instance_id, id)",
+        "CREATE INDEX IF NOT EXISTS idx_scan_correlation_events ON tbl_scan_correlation_results_events (correlation_id)",
+        # ── AI tables ─────────────────────────────────────────────────────
+        """CREATE TABLE IF NOT EXISTS tbl_scan_ai_analysis (
+            id               VARCHAR NOT NULL PRIMARY KEY,
+            scan_instance_id VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid) ON DELETE CASCADE,
+            provider         VARCHAR NOT NULL,
+            model            VARCHAR NOT NULL,
+            mode             VARCHAR NOT NULL,
+            created          BIGINT DEFAULT 0,
+            status           VARCHAR NOT NULL DEFAULT 'pending',
+            result_json      TEXT,
+            token_usage      INT DEFAULT 0,
+            error            VARCHAR
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_scan_ai_analysis ON tbl_scan_ai_analysis (scan_instance_id)",
+        """CREATE TABLE IF NOT EXISTS tbl_scan_ai_chat (
+            id               VARCHAR NOT NULL PRIMARY KEY,
+            scan_instance_id VARCHAR NOT NULL REFERENCES tbl_scan_instance(guid) ON DELETE CASCADE,
+            role             VARCHAR NOT NULL,
+            content          TEXT NOT NULL,
+            token_usage      INT DEFAULT 0,
+            created          BIGINT NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_scan_ai_chat ON tbl_scan_ai_chat (scan_instance_id, created)",
+        """CREATE TABLE IF NOT EXISTS tbl_correlation_rules (
+            id           VARCHAR NOT NULL PRIMARY KEY,
+            rule_id      VARCHAR NOT NULL UNIQUE,
+            yaml_content TEXT NOT NULL,
+            enabled      INT DEFAULT 1,
+            created      BIGINT NOT NULL,
+            updated      BIGINT NOT NULL
+        )""",
+        # ── RBAC tables ───────────────────────────────────────────────────
+        """CREATE TABLE IF NOT EXISTS tbl_users (
+            id           VARCHAR NOT NULL PRIMARY KEY,
+            username     VARCHAR NOT NULL UNIQUE,
+            password     VARCHAR NOT NULL,
+            display_name VARCHAR NOT NULL DEFAULT '',
+            email        VARCHAR NOT NULL DEFAULT '',
+            is_active    INT NOT NULL DEFAULT 1,
+            created      BIGINT NOT NULL DEFAULT 0,
+            updated      BIGINT NOT NULL DEFAULT 0
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_roles (
+            id          VARCHAR NOT NULL PRIMARY KEY,
+            name        VARCHAR NOT NULL UNIQUE,
+            description VARCHAR NOT NULL DEFAULT ''
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_permissions (
+            id       VARCHAR NOT NULL PRIMARY KEY,
+            resource VARCHAR NOT NULL,
+            action   VARCHAR NOT NULL,
+            UNIQUE (resource, action)
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_user_roles (
+            user_id VARCHAR NOT NULL,
+            role_id VARCHAR NOT NULL,
+            PRIMARY KEY (user_id, role_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_role_permissions (
+            role_id       VARCHAR NOT NULL,
+            permission_id VARCHAR NOT NULL,
+            PRIMARY KEY (role_id, permission_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS tbl_audit_log (
+            id          VARCHAR NOT NULL PRIMARY KEY,
+            user_id     VARCHAR NOT NULL,
+            username    VARCHAR NOT NULL,
+            action      VARCHAR NOT NULL,
+            resource    VARCHAR NOT NULL,
+            resource_id VARCHAR NOT NULL DEFAULT '',
+            details     VARCHAR NOT NULL DEFAULT '',
+            ip_address  VARCHAR NOT NULL DEFAULT '',
+            created     BIGINT NOT NULL DEFAULT 0
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_audit_log_user    ON tbl_audit_log (user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_audit_log_created ON tbl_audit_log (created)",
+        # ── Worker registry ───────────────────────────────────────────────
+        """CREATE TABLE IF NOT EXISTS tbl_workers (
+            id           VARCHAR NOT NULL PRIMARY KEY,
+            name         VARCHAR NOT NULL,
+            host         VARCHAR NOT NULL,
+            queue_type   VARCHAR NOT NULL DEFAULT 'fast',
+            status       VARCHAR NOT NULL DEFAULT 'idle',
+            current_scan VARCHAR NOT NULL DEFAULT '',
+            last_seen    BIGINT NOT NULL DEFAULT 0,
+            registered   BIGINT NOT NULL DEFAULT 0
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_workers_status ON tbl_workers (status)",
     ]
 
     eventDetails = [
@@ -309,9 +310,9 @@ class SpiderFootDb:
         ['PHYSICAL_COORDINATES', 'Physical Coordinates', 0, 'ENTITY'],
         ['PGP_KEY', 'PGP Public Key', 0, 'DATA'],
         ['PROXY_HOST', 'Proxy Host', 0, 'DESCRIPTOR'],
-        ['PROVIDER_DNS', 'Name Server (DNS ''NS'' Records)', 0, 'ENTITY'],
+        ['PROVIDER_DNS', "Name Server (DNS 'NS' Records)", 0, 'ENTITY'],
         ['PROVIDER_JAVASCRIPT', 'Externally Hosted Javascript', 0, 'ENTITY'],
-        ['PROVIDER_MAIL', 'Email Gateway (DNS ''MX'' Records)', 0, 'ENTITY'],
+        ['PROVIDER_MAIL', "Email Gateway (DNS 'MX' Records)", 0, 'ENTITY'],
         ['PROVIDER_HOSTING', 'Hosting Provider', 0, 'ENTITY'],
         ['PROVIDER_TELCO', 'Telecommunications Provider', 0, 'ENTITY'],
         ['PUBLIC_CODE_REPO', 'Public Code Repository', 0, 'ENTITY'],
@@ -373,15 +374,16 @@ class SpiderFootDb:
         ['WIKIPEDIA_PAGE_EDIT', 'Wikipedia Page Edit', 0, 'DESCRIPTOR'],
     ]
 
-    def __init__(self, opts: dict, init: bool = False) -> None:
-        """Initialize database and create handle to the SQLite database file.
-        Creates the database file if it does not exist.
-        Creates database schema if it does not exist.
+    def __init__(self, opts: dict = None, init: bool = False, conn=None) -> None:
+        """Initialize database connection.
+
+        Accepts either a live psycopg2 connection (from pool) via `conn`,
+        or a config dict with `__database_url` key (or DATABASE_URL env var).
 
         Args:
-            opts (dict): must specify the database file path in the '__database' key
-            init (bool): initialise the database schema.
-                         if the database file does not exist this option will be ignored.
+            opts (dict): config dict; may contain `__database_url`
+            init (bool): force schema creation (ignored when conn is supplied)
+            conn: existing psycopg2 connection (preferred, used by pool injection)
 
         Raises:
             TypeError: arg type was invalid
@@ -389,202 +391,90 @@ class SpiderFootDb:
             IOError: database I/O failed
         """
 
-        if not isinstance(opts, dict):
+        if conn is not None:
+            # Pool-injected connection — caller manages lifecycle
+            self._owns_connection = False
+            self.conn = conn
+            self.dbh = conn.cursor()
+            self._ensure_schema()
+            return
+
+        if opts is not None and not isinstance(opts, dict):
             raise TypeError(f"opts is {type(opts)}; expected dict()") from None
-        if not opts:
-            raise ValueError("opts is empty") from None
-        if not opts.get('__database'):
-            raise ValueError("opts['__database'] is empty") from None
 
-        database_path = opts['__database']
+        database_url = None
+        if opts:
+            database_url = opts.get('__database_url')
+        if not database_url:
+            database_url = os.environ.get('DATABASE_URL')
 
-        # create database directory
-        Path(database_path).parent.mkdir(exist_ok=True, parents=True)
+        if not database_url:
+            raise ValueError(
+                "No database URL provided. Set DATABASE_URL env var or pass '__database_url' in opts."
+            ) from None
 
-        # connect() will create the database file if it doesn't exist, but
-        # at least we can use this opportunity to ensure we have permissions to
-        # read and write to such a file.
         try:
-            dbh = sqlite3.connect(database_path, check_same_thread=False)
+            self.conn = psycopg2.connect(database_url)
+            self.conn.autocommit = False
+            self.dbh = self.conn.cursor()
         except Exception as e:
-            raise IOError(f"Error connecting to internal database {database_path}") from e
+            raise IOError(f"Error connecting to PostgreSQL database: {e}") from e
 
-        if dbh is None:
-            raise IOError(f"Could not connect to internal database, and could not create {database_path}") from None
+        self._owns_connection = True
+        self._ensure_schema()
 
-        dbh.text_factory = str
+    def _table_exists(self, table_name: str) -> bool:
+        """Check whether a table exists in the public schema."""
+        self.dbh.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = %s",
+            [table_name]
+        )
+        return self.dbh.fetchone() is not None
 
-        self.conn = dbh
-        self.dbh = dbh.cursor()
-
-        def __dbregex__(qry: str, data: str) -> bool:
-            """SQLite doesn't support regex queries, so we create
-            a custom function to do so.
-
-            Args:
-                qry (str): TBD
-                data (str): TBD
-
-            Returns:
-                bool: matches
-            """
-
-            try:
-                rx = re.compile(qry, re.IGNORECASE | re.DOTALL)
-                ret = rx.match(data)
-            except Exception:
-                return False
-            return ret is not None
-
-        # Now we actually check to ensure the database file has the schema set
-        # up correctly.
-        with self.dbhLock:
-            try:
-                self.dbh.execute('SELECT COUNT(*) FROM tbl_scan_config')
-                self.conn.create_function("REGEXP", 2, __dbregex__)
-            except sqlite3.Error:
-                init = True
-                try:
-                    self.create()
-                except Exception as e:
-                    raise IOError("Tried to set up the SpiderFoot database schema, but failed") from e
-
-            # For users with pre 4.0 databases, add the correlation
-            # tables + indexes if they don't exist.
-            try:
-                self.dbh.execute("SELECT COUNT(*) FROM tbl_scan_correlation_results")
-            except sqlite3.Error:
-                try:
-                    for query in self.createSchemaQueries:
-                        if "correlation" in query:
-                            self.dbh.execute(query)
-                        self.conn.commit()
-                except sqlite3.Error:
-                    raise IOError("Looks like you are running a pre-4.0 database. Unfortunately "
-                                  "SpiderFoot wasn't able to migrate you, so you'll need to delete "
-                                  "your SpiderFoot database in order to proceed.") from None
-
-            # Add AI analysis table if it doesn't exist (for pre-Phase 8 databases)
-            try:
-                self.dbh.execute("SELECT COUNT(*) FROM tbl_scan_ai_analysis")
-            except sqlite3.Error:
-                try:
-                    for query in self.createSchemaQueries:
-                        if "ai_analysis" in query:
-                            self.dbh.execute(query)
-                    self.conn.commit()
-                except sqlite3.Error:
-                    pass  # Non-critical, will be created on next full init
-
-            # Add AI chat table if it doesn't exist (for pre-Phase 8b databases)
-            try:
-                self.dbh.execute("SELECT COUNT(*) FROM tbl_scan_ai_chat")
-            except sqlite3.Error:
-                try:
-                    for query in self.createSchemaQueries:
-                        if "ai_chat" in query:
-                            self.dbh.execute(query)
-                    self.conn.commit()
-                except sqlite3.Error:
-                    pass  # Non-critical, will be created on next full init
-
-            # Add correlation rules table if it doesn't exist (for pre-Phase 9 databases)
-            try:
-                self.dbh.execute("SELECT COUNT(*) FROM tbl_correlation_rules")
-            except sqlite3.Error:
-                try:
-                    for query in self.createSchemaQueries:
-                        if "correlation_rules" in query and "tbl_scan_correlation" not in query:
-                            self.dbh.execute(query)
-                    self.conn.commit()
-                except sqlite3.Error:
-                    pass  # Non-critical, will be created on next full init
-
-            # Add RBAC tables if they don't exist (Phase 10)
-            try:
-                self.dbh.execute("SELECT COUNT(*) FROM tbl_users")
-            except sqlite3.Error:
-                try:
-                    rbac_keywords = ("tbl_users", "tbl_roles", "tbl_permissions",
-                                     "tbl_user_roles", "tbl_role_permissions",
-                                     "tbl_audit_log", "idx_audit_log")
-                    for query in self.createSchemaQueries:
-                        if any(kw in query for kw in rbac_keywords):
-                            self.dbh.execute(query)
-                    self.conn.commit()
-                except sqlite3.Error as e:
-                    log.error(f"Failed to create RBAC tables: {e}")
-
-            # Seed RBAC data (idempotent)
-            self._seed_rbac_data()
-
-            # Add worker registry table if it doesn't exist (Phase 11)
-            try:
-                self.dbh.execute("SELECT COUNT(*) FROM tbl_workers")
-            except sqlite3.Error:
-                try:
-                    for query in self.createSchemaQueries:
-                        if "tbl_workers" in query or "idx_workers" in query:
-                            self.dbh.execute(query)
-                    self.conn.commit()
-                except sqlite3.Error as e:
-                    log.error(f"Failed to create tbl_workers: {e}")
-
-            if init:
-                for row in self.eventDetails:
-                    event = row[0]
-                    event_descr = row[1]
-                    event_raw = row[2]
-                    event_type = row[3]
-                    qry = "INSERT INTO tbl_event_types (event, event_descr, event_raw, event_type) VALUES (?, ?, ?, ?)"
-
-                    try:
-                        self.dbh.execute(qry, (
-                            event, event_descr, event_raw, event_type
-                        ))
-                        self.conn.commit()
-                    except Exception:
-                        continue
-                self.conn.commit()
+    def _ensure_schema(self) -> None:
+        """Create schema if needed and seed RBAC data."""
+        try:
+            self.create()
+        except Exception as e:
+            raise IOError("Tried to set up the SpiderFoot database schema, but failed") from e
+        self._seed_rbac_data()
 
     #
     # Back-end database operations
     #
 
     def create(self) -> None:
-        """Create the database schema.
+        """Create the database schema (idempotent — uses IF NOT EXISTS).
 
         Raises:
             IOError: database I/O failed
         """
+        try:
+            for qry in self.createSchemaQueries:
+                self.dbh.execute(qry)
+            self.conn.commit()
 
-        with self.dbhLock:
-            try:
-                for qry in self.createSchemaQueries:
-                    self.dbh.execute(qry)
-                self.conn.commit()
-                for row in self.eventDetails:
-                    event = row[0]
-                    event_descr = row[1]
-                    event_raw = row[2]
-                    event_type = row[3]
-                    qry = "INSERT INTO tbl_event_types (event, event_descr, event_raw, event_type) VALUES (?, ?, ?, ?)"
-
-                    self.dbh.execute(qry, (
-                        event, event_descr, event_raw, event_type
-                    ))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when setting up database") from e
+            # Seed event types (idempotent via ON CONFLICT DO NOTHING)
+            for row in self.eventDetails:
+                self.dbh.execute(
+                    "INSERT INTO tbl_event_types (event, event_descr, event_raw, event_type) "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT (event) DO NOTHING",
+                    (row[0], row[1], row[2], row[3])
+                )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when setting up database") from e
 
     def close(self) -> None:
-        """Close the database handle."""
+        """Close the database cursor and, if this instance owns the connection, the connection too."""
+        self.dbh.close()
+        if getattr(self, '_owns_connection', False) and self.conn and not self.conn.closed:
+            self.conn.close()
 
-        with self.dbhLock:
-            self.dbh.close()
-
-    def vacuumDB(self) -> None:
-        """Vacuum the database. Clears unused database file pages.
+    def vacuumDB(self) -> bool:
+        """Vacuum the database.
 
         Returns:
             bool: success
@@ -592,20 +482,20 @@ class SpiderFootDb:
         Raises:
             IOError: database I/O failed
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute("VACUUM")
-                self.conn.commit()
-                return True
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when vacuuming the database") from e
-        return False
+        try:
+            old_autocommit = self.conn.autocommit
+            self.conn.autocommit = True
+            self.dbh.execute("VACUUM")
+            self.conn.autocommit = old_autocommit
+            return True
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when vacuuming the database") from e
 
     def search(self, criteria: dict, filterFp: bool = False) -> list:
         """Search database.
 
         Args:
-            criteria (dict): search criteria such as:
+            criteria (dict): search criteria:
                 - scan_id (search within a scan, if omitted search all)
                 - type (search a specific type, if omitted search all)
                 - value (search values for a specific string, if omitted search all)
@@ -630,59 +520,56 @@ class SpiderFootDb:
             if key not in valid_criteria:
                 criteria.pop(key, None)
                 continue
-
             if not isinstance(criteria.get(key), str):
                 raise TypeError(f"criteria[{key}] is {type(criteria.get(key))}; expected str()") from None
-
             if not criteria[key]:
                 criteria.pop(key, None)
                 continue
 
         if len(criteria) == 0:
             raise ValueError(f"No valid search criteria provided; expected: {', '.join(valid_criteria)}") from None
-
         if len(criteria) == 1:
             raise ValueError("Only one search criteria provided; expected at least two")
 
         qvars = list()
-        qry = "SELECT ROUND(c.generated) AS generated, c.data, \
-            s.data as 'source_data', \
-            c.module, c.type, c.confidence, c.visibility, c.risk, c.hash, \
-            c.source_event_hash, t.event_descr, t.event_type, c.scan_instance_id, \
-            c.false_positive as 'fp', s.false_positive as 'parent_fp' \
-            FROM tbl_scan_results c, tbl_scan_results s, tbl_event_types t \
-            WHERE s.scan_instance_id = c.scan_instance_id AND \
-            t.event = c.type AND c.source_event_hash = s.hash "
+        qry = ("SELECT ROUND(c.generated) AS generated, c.data, "
+               "s.data as source_data, "
+               "c.module, c.type, c.confidence, c.visibility, c.risk, c.hash, "
+               "c.source_event_hash, t.event_descr, t.event_type, c.scan_instance_id, "
+               "c.false_positive as fp, s.false_positive as parent_fp "
+               "FROM tbl_scan_results c, tbl_scan_results s, tbl_event_types t "
+               "WHERE s.scan_instance_id = c.scan_instance_id AND "
+               "t.event = c.type AND c.source_event_hash = s.hash ")
 
         if filterFp:
             qry += " AND COALESCE(c.false_positive, 0) <> 1 "
 
         if criteria.get('scan_id') is not None:
-            qry += "AND c.scan_instance_id = ? "
+            qry += "AND c.scan_instance_id = %s "
             qvars.append(criteria['scan_id'])
 
         if criteria.get('type') is not None:
-            qry += " AND c.type = ? "
+            qry += " AND c.type = %s "
             qvars.append(criteria['type'])
 
         if criteria.get('value') is not None:
-            qry += " AND (c.data LIKE ? OR s.data LIKE ?) "
+            qry += " AND (c.data LIKE %s OR s.data LIKE %s) "
             qvars.append(criteria['value'])
             qvars.append(criteria['value'])
 
         if criteria.get('regex') is not None:
-            qry += " AND (c.data REGEXP ? OR s.data REGEXP ?) "
+            # PostgreSQL native case-insensitive regex replaces SQLite custom REGEXP function
+            qry += " AND (c.data ~* %s OR s.data ~* %s) "
             qvars.append(criteria['regex'])
             qvars.append(criteria['regex'])
 
         qry += " ORDER BY c.data"
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching search results") from e
+        try:
+            self.dbh.execute(qry, qvars)
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching search results") from e
 
     def eventTypes(self) -> list:
         """Get event types.
@@ -693,59 +580,49 @@ class SpiderFootDb:
         Raises:
             IOError: database I/O failed
         """
-
         qry = "SELECT event_descr, event, event_raw, event_type FROM tbl_event_types"
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when retrieving event types") from e
+        try:
+            self.dbh.execute(qry)
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when retrieving event types") from e
 
     def scanLogEvents(self, batch: list) -> bool:
-        """Logs a batch of events to the database.
+        """Log a batch of events to the database.
 
         Args:
-            batch (list): tuples containing: instanceId, classification, message, component, logTime
+            batch (list): tuples of (instanceId, classification, message, component, logTime)
+
+        Returns:
+            bool: success
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
-
-        Returns:
-            bool: Whether the logging operation succeeded
         """
-
         inserts = []
 
         for instanceId, classification, message, component, logTime in batch:
             if not isinstance(instanceId, str):
                 raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
             if not isinstance(classification, str):
                 raise TypeError(f"classification is {type(classification)}; expected str()") from None
-
             if not isinstance(message, str):
                 raise TypeError(f"message is {type(message)}; expected str()") from None
-
             if not component:
                 component = "SpiderFoot"
-
-            inserts.append((instanceId, logTime * 1000, component, classification, message))
+            inserts.append((instanceId, int(logTime * 1000), component, classification, message.replace('\x00', '')))
 
         if inserts:
-            qry = "INSERT INTO tbl_scan_log \
-                (scan_instance_id, generated, component, type, message) \
-                VALUES (?, ?, ?, ?, ?)"
-
-            with self.dbhLock:
-                try:
-                    self.dbh.executemany(qry, inserts)
-                    self.conn.commit()
-                except sqlite3.Error as e:
-                    if "locked" not in e.args[0] and "thread" not in e.args[0]:
-                        raise IOError("Unable to log scan event in database") from e
-                    return False
+            qry = ("INSERT INTO tbl_scan_log "
+                   "(scan_instance_id, generated, component, type, message) "
+                   "VALUES (%s, %s, %s, %s, %s)")
+            try:
+                self.dbh.executemany(qry, inserts)
+                self.conn.commit()
+            except psycopg2.Error as e:
+                self.conn.rollback()
+                raise IOError("Unable to log scan events in database") from e
         return True
 
     def scanLogEvent(self, instanceId: str, classification: str, message: str, component: str = None) -> None:
@@ -753,284 +630,253 @@ class SpiderFootDb:
 
         Args:
             instanceId (str): scan instance ID
-            classification (str): TBD
-            message (str): TBD
-            component (str): TBD
+            classification (str): log level
+            message (str): log message
+            component (str): component name
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
-
-        Todo:
-            Do something smarter to handle database locks
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
         if not isinstance(classification, str):
             raise TypeError(f"classification is {type(classification)}; expected str()") from None
-
         if not isinstance(message, str):
             raise TypeError(f"message is {type(message)}; expected str()") from None
-
         if not component:
             component = "SpiderFoot"
 
-        qry = "INSERT INTO tbl_scan_log \
-            (scan_instance_id, generated, component, type, message) \
-            VALUES (?, ?, ?, ?, ?)"
+        qry = ("INSERT INTO tbl_scan_log "
+               "(scan_instance_id, generated, component, type, message) "
+               "VALUES (%s, %s, %s, %s, %s)")
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, (
-                    instanceId, time.time() * 1000, component, classification, message
-                ))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                if "locked" not in e.args[0] and "thread" not in e.args[0]:
-                    raise IOError("Unable to log scan event in database") from e
-                # print("[warning] Couldn't log due to SQLite limitations. You can probably ignore this.")
-                # log.critical(f"Unable to log event in DB due to lock: {e.args[0]}")
-                pass
+        try:
+            self.dbh.execute(qry, (
+                instanceId, int(time.time() * 1000), component, classification, message.replace('\x00', '')
+            ))
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("Unable to log scan event in database") from e
 
     def scanInstanceCreate(self, instanceId: str, scanName: str, scanTarget: str) -> None:
         """Store a scan instance in the database.
 
         Args:
             instanceId (str): scan instance ID
-            scanName(str): scan name
+            scanName (str): scan name
             scanTarget (str): scan target
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
         if not isinstance(scanName, str):
             raise TypeError(f"scanName is {type(scanName)}; expected str()") from None
-
         if not isinstance(scanTarget, str):
             raise TypeError(f"scanTarget is {type(scanTarget)}; expected str()") from None
 
-        qry = "INSERT INTO tbl_scan_instance \
-            (guid, name, seed_target, created, status) \
-            VALUES (?, ?, ?, ?, ?)"
+        qry = ("INSERT INTO tbl_scan_instance "
+               "(guid, name, seed_target, created, status) "
+               "VALUES (%s, %s, %s, %s, %s) "
+               "ON CONFLICT (guid) DO NOTHING")
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, (
-                    instanceId, scanName, scanTarget, time.time() * 1000, 'CREATED'
-                ))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("Unable to create scan instance in database") from e
+        try:
+            self.dbh.execute(qry, (
+                instanceId, scanName, scanTarget, int(time.time() * 1000), 'CREATED'
+            ))
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("Unable to create scan instance in database") from e
 
     def scanInstanceSet(self, instanceId: str, started: str = None, ended: str = None, status: str = None) -> None:
-        """Update the start time, end time or status (or all 3) of a scan instance.
+        """Update the start time, end time or status of a scan instance.
 
         Args:
             instanceId (str): scan instance ID
-            started (str): scan start time
-            ended (str): scan end time
-            status (str): scan status
+            started: scan start time
+            ended: scan end time
+            status: scan status
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
 
         qvars = list()
-        qry = "UPDATE tbl_scan_instance SET "
+        sets = []
 
         if started is not None:
-            qry += " started = ?,"
+            sets.append("started = %s")
             qvars.append(started)
-
         if ended is not None:
-            qry += " ended = ?,"
+            sets.append("ended = %s")
             qvars.append(ended)
-
         if status is not None:
-            qry += " status = ?,"
+            sets.append("status = %s")
             qvars.append(status)
 
-        # guid = guid is a little hack to avoid messing with , placement above
-        qry += " guid = guid WHERE guid = ?"
+        if not sets:
+            return
+
+        qry = f"UPDATE tbl_scan_instance SET {', '.join(sets)} WHERE guid = %s"
         qvars.append(instanceId)
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                self.conn.commit()
-            except sqlite3.Error:
-                raise IOError("Unable to set information for the scan instance.") from None
+        try:
+            self.dbh.execute(qry, qvars)
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("Unable to set information for the scan instance.") from e
 
     def scanInstanceGet(self, instanceId: str) -> list:
-        """Return info about a scan instance (name, target, created, started, ended, status)
+        """Return info about a scan instance.
 
         Args:
             instanceId (str): scan instance ID
 
         Returns:
-            list: scan instance info
+            list: (name, seed_target, created, started, ended, status)
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
 
-        qry = "SELECT name, seed_target, ROUND(created/1000) AS created, \
-            ROUND(started/1000) AS started, ROUND(ended/1000) AS ended, status \
-            FROM tbl_scan_instance WHERE guid = ?"
-        qvars = [instanceId]
+        qry = ("SELECT name, seed_target, ROUND(created/1000.0)::float AS created, "
+               "ROUND(started/1000.0)::float AS started, ROUND(ended/1000.0)::float AS ended, status "
+               "FROM tbl_scan_instance WHERE guid = %s")
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchone()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when retrieving scan instance") from e
+        try:
+            self.dbh.execute(qry, [instanceId])
+            return self.dbh.fetchone()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when retrieving scan instance") from e
 
     def scanResultSummary(self, instanceId: str, by: str = "type") -> list:
         """Obtain a summary of the results, filtered by event type, module or entity.
 
         Args:
             instanceId (str): scan instance ID
-            by (str): filter by type
+            by (str): 'type', 'module', or 'entity'
 
         Returns:
-            list: scan instance info
+            list: summary rows
 
         Raises:
             TypeError: arg type was invalid
             ValueError: arg value was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
         if not isinstance(by, str):
             raise TypeError(f"by is {type(by)}; expected str()") from None
-
         if by not in ["type", "module", "entity"]:
             raise ValueError(f"Invalid filter by value: {by}") from None
 
         if by == "type":
-            qry = "SELECT r.type, e.event_descr, MAX(ROUND(generated)) AS last_in, \
-                count(*) AS total, count(DISTINCT r.data) as utotal FROM \
-                tbl_scan_results r, tbl_event_types e WHERE e.event = r.type \
-                AND r.scan_instance_id = ? GROUP BY r.type ORDER BY e.event_descr"
+            qry = ("SELECT r.type, e.event_descr, MAX(ROUND(generated)) AS last_in, "
+                   "count(*) AS total, count(DISTINCT r.data) as utotal FROM "
+                   "tbl_scan_results r, tbl_event_types e WHERE e.event = r.type "
+                   "AND r.scan_instance_id = %s GROUP BY r.type, e.event_descr ORDER BY e.event_descr")
 
         if by == "module":
-            qry = "SELECT r.module, '', MAX(ROUND(generated)) AS last_in, \
-                count(*) AS total, count(DISTINCT r.data) as utotal FROM \
-                tbl_scan_results r, tbl_event_types e WHERE e.event = r.type \
-                AND r.scan_instance_id = ? GROUP BY r.module ORDER BY r.module DESC"
+            qry = ("SELECT r.module, '', MAX(ROUND(generated)) AS last_in, "
+                   "count(*) AS total, count(DISTINCT r.data) as utotal FROM "
+                   "tbl_scan_results r, tbl_event_types e WHERE e.event = r.type "
+                   "AND r.scan_instance_id = %s GROUP BY r.module ORDER BY r.module DESC")
 
         if by == "entity":
-            qry = "SELECT r.data, e.event_descr, MAX(ROUND(generated)) AS last_in, \
-                count(*) AS total, count(DISTINCT r.data) as utotal FROM \
-                tbl_scan_results r, tbl_event_types e WHERE e.event = r.type \
-                AND r.scan_instance_id = ? \
-                AND e.event_type in ('ENTITY') \
-                GROUP BY r.data, e.event_descr ORDER BY total DESC limit 50"
+            qry = ("SELECT r.data, e.event_descr, MAX(ROUND(generated)) AS last_in, "
+                   "count(*) AS total, count(DISTINCT r.data) as utotal FROM "
+                   "tbl_scan_results r, tbl_event_types e WHERE e.event = r.type "
+                   "AND r.scan_instance_id = %s "
+                   "AND e.event_type in ('ENTITY') "
+                   "GROUP BY r.data, e.event_descr ORDER BY total DESC LIMIT 50")
 
-        qvars = [instanceId]
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching result summary") from e
+        try:
+            self.dbh.execute(qry, [instanceId])
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching result summary") from e
 
     def scanCorrelationSummary(self, instanceId: str, by: str = "rule") -> list:
-        """Obtain a summary of the correlations, filtered by rule or risk
+        """Obtain a summary of the correlations.
 
         Args:
             instanceId (str): scan instance ID
-            by (str): filter by rule or risk
+            by (str): 'rule' or 'risk'
 
         Returns:
-            list: scan correlation summary
+            list: correlation summary
 
         Raises:
             TypeError: arg type was invalid
             ValueError: arg value was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
         if not isinstance(by, str):
             raise TypeError(f"by is {type(by)}; expected str()") from None
-
         if by not in ["rule", "risk"]:
             raise ValueError(f"Invalid filter by value: {by}") from None
 
         if by == "risk":
-            qry = "SELECT rule_risk, count(*) AS total FROM \
-                tbl_scan_correlation_results \
-                WHERE scan_instance_id = ? GROUP BY rule_risk ORDER BY rule_id"
+            qry = ("SELECT rule_risk, count(*) AS total FROM "
+                   "tbl_scan_correlation_results "
+                   "WHERE scan_instance_id = %s GROUP BY rule_risk ORDER BY rule_risk")
 
         if by == "rule":
-            qry = "SELECT rule_id, rule_name, rule_risk, rule_descr, \
-                count(*) AS total FROM \
-                tbl_scan_correlation_results \
-                WHERE scan_instance_id = ? GROUP BY rule_id ORDER BY rule_id"
+            qry = ("SELECT rule_id, rule_name, rule_risk, rule_descr, "
+                   "count(*) AS total FROM "
+                   "tbl_scan_correlation_results "
+                   "WHERE scan_instance_id = %s GROUP BY rule_id, rule_name, rule_risk, rule_descr "
+                   "ORDER BY rule_id")
 
-        qvars = [instanceId]
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching correlation summary") from e
+        try:
+            self.dbh.execute(qry, [instanceId])
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching correlation summary") from e
 
     def scanCorrelationList(self, instanceId: str) -> list:
-        """Obtain a list of the correlations from a scan
+        """Obtain a list of the correlations from a scan.
 
         Args:
             instanceId (str): scan instance ID
 
         Returns:
-            list: scan correlation list
+            list: correlation list
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
 
-        qry = "SELECT c.id, c.title, c.rule_id, c.rule_risk, c.rule_name, \
-            c.rule_descr, c.rule_logic, count(e.event_hash) AS event_count FROM \
-            tbl_scan_correlation_results c, tbl_scan_correlation_results_events e \
-            WHERE scan_instance_id = ? AND c.id = e.correlation_id \
-            GROUP BY c.id ORDER BY c.title, c.rule_risk"
+        qry = ("SELECT c.id, c.title, c.rule_id, c.rule_risk, c.rule_name, "
+               "c.rule_descr, c.rule_logic, count(e.event_hash) AS event_count FROM "
+               "tbl_scan_correlation_results c, tbl_scan_correlation_results_events e "
+               "WHERE scan_instance_id = %s AND c.id = e.correlation_id "
+               "GROUP BY c.id, c.title, c.rule_id, c.rule_risk, c.rule_name, c.rule_descr, c.rule_logic "
+               "ORDER BY c.title, c.rule_risk")
 
-        qvars = [instanceId]
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching correlation list") from e
+        try:
+            self.dbh.execute(qry, [instanceId])
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching correlation list") from e
 
     def scanResultEvent(
         self,
@@ -1060,38 +906,36 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
         if not isinstance(eventType, str) and not isinstance(eventType, list):
             raise TypeError(f"eventType is {type(eventType)}; expected str() or list()") from None
 
-        qry = "SELECT ROUND(c.generated) AS generated, c.data, \
-            s.data as 'source_data', \
-            c.module, c.type, c.confidence, c.visibility, c.risk, c.hash, \
-            c.source_event_hash, t.event_descr, t.event_type, s.scan_instance_id, \
-            c.false_positive as 'fp', s.false_positive as 'parent_fp' \
-            FROM tbl_scan_results c, tbl_scan_results s, tbl_event_types t "
+        qry = ("SELECT ROUND(c.generated) AS generated, c.data, "
+               "s.data as source_data, "
+               "c.module, c.type, c.confidence, c.visibility, c.risk, c.hash, "
+               "c.source_event_hash, t.event_descr, t.event_type, s.scan_instance_id, "
+               "c.false_positive as fp, s.false_positive as parent_fp "
+               "FROM tbl_scan_results c, tbl_scan_results s, tbl_event_types t ")
 
         if correlationId:
             qry += ", tbl_scan_correlation_results_events ce "
 
-        qry += "WHERE c.scan_instance_id = ? AND c.source_event_hash = s.hash AND \
-            s.scan_instance_id = c.scan_instance_id AND t.event = c.type"
+        qry += ("WHERE c.scan_instance_id = %s AND c.source_event_hash = s.hash AND "
+                "s.scan_instance_id = c.scan_instance_id AND t.event = c.type")
 
         qvars = [instanceId]
 
         if correlationId:
-            qry += " AND ce.event_hash = c.hash AND ce.correlation_id = ?"
+            qry += " AND ce.event_hash = c.hash AND ce.correlation_id = %s"
             qvars.append(correlationId)
 
         if eventType != "ALL":
             if isinstance(eventType, list):
-                qry += " AND c.type in (" + ','.join(['?'] * len(eventType)) + ")"
+                qry += " AND c.type IN (" + ','.join(['%s'] * len(eventType)) + ")"
                 qvars.extend(eventType)
             else:
-                qry += " AND c.type = ?"
+                qry += " AND c.type = %s"
                 qvars.append(eventType)
 
         if filterFp:
@@ -1099,36 +943,35 @@ class SpiderFootDb:
 
         if srcModule:
             if isinstance(srcModule, list):
-                qry += " AND c.module in (" + ','.join(['?'] * len(srcModule)) + ")"
+                qry += " AND c.module IN (" + ','.join(['%s'] * len(srcModule)) + ")"
                 qvars.extend(srcModule)
             else:
-                qry += " AND c.module = ?"
+                qry += " AND c.module = %s"
                 qvars.append(srcModule)
 
         if data:
             if isinstance(data, list):
-                qry += " AND c.data in (" + ','.join(['?'] * len(data)) + ")"
+                qry += " AND c.data IN (" + ','.join(['%s'] * len(data)) + ")"
                 qvars.extend(data)
             else:
-                qry += " AND c.data = ?"
+                qry += " AND c.data = %s"
                 qvars.append(data)
 
         if sourceId:
             if isinstance(sourceId, list):
-                qry += " AND c.source_event_hash in (" + ','.join(['?'] * len(sourceId)) + ")"
+                qry += " AND c.source_event_hash IN (" + ','.join(['%s'] * len(sourceId)) + ")"
                 qvars.extend(sourceId)
             else:
-                qry += " AND c.source_event_hash = ?"
+                qry += " AND c.source_event_hash = %s"
                 qvars.append(sourceId)
 
         qry += " ORDER BY c.data"
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching result events") from e
+        try:
+            self.dbh.execute(qry, qvars)
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching result events") from e
 
     def scanResultEventUnique(self, instanceId: str, eventType: str = 'ALL', filterFp: bool = False) -> list:
         """Obtain a unique list of elements.
@@ -1145,19 +988,17 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
         if not isinstance(eventType, str):
             raise TypeError(f"eventType is {type(eventType)}; expected str()") from None
 
-        qry = "SELECT DISTINCT data, type, COUNT(*) FROM tbl_scan_results \
-            WHERE scan_instance_id = ?"
+        qry = ("SELECT DISTINCT data, type, COUNT(*) FROM tbl_scan_results "
+               "WHERE scan_instance_id = %s")
         qvars = [instanceId]
 
         if eventType != "ALL":
-            qry += " AND type = ?"
+            qry += " AND type = %s"
             qvars.append(eventType)
 
         if filterFp:
@@ -1165,12 +1006,11 @@ class SpiderFootDb:
 
         qry += " GROUP BY type, data ORDER BY COUNT(*)"
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching unique result events") from e
+        try:
+            self.dbh.execute(qry, qvars)
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching unique result events") from e
 
     def scanLogs(self, instanceId: str, limit: int = None, fromRowId: int = 0, reverse: bool = False) -> list:
         """Get scan logs.
@@ -1178,7 +1018,7 @@ class SpiderFootDb:
         Args:
             instanceId (str): scan instance ID
             limit (int): limit number of results
-            fromRowId (int): retrieve logs starting from row ID
+            fromRowId (int): retrieve logs starting from this log ID
             reverse (bool): search result order
 
         Returns:
@@ -1188,35 +1028,31 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
 
-        qry = "SELECT generated AS generated, component, \
-            type, message, rowid FROM tbl_scan_log WHERE scan_instance_id = ?"
-        if fromRowId:
-            qry += " and rowid > ?"
+        # Uses the BIGSERIAL 'id' column as the row cursor (replaces SQLite rowid)
+        qry = ("SELECT generated, component, type, message, id "
+               "FROM tbl_scan_log WHERE scan_instance_id = %s")
 
-        qry += " ORDER BY generated "
-        if reverse:
-            qry += "ASC"
-        else:
-            qry += "DESC"
         qvars = [instanceId]
 
         if fromRowId:
+            qry += " AND id > %s"
             qvars.append(str(fromRowId))
 
+        qry += " ORDER BY generated "
+        qry += "ASC" if reverse else "DESC"
+
         if limit is not None:
-            qry += " LIMIT ?"
+            qry += " LIMIT %s"
             qvars.append(str(limit))
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching scan logs") from e
+        try:
+            self.dbh.execute(qry, qvars)
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching scan logs") from e
 
     def scanErrors(self, instanceId: str, limit: int = 0) -> list:
         """Get scan errors.
@@ -1232,31 +1068,27 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
         if not isinstance(limit, int):
             raise TypeError(f"limit is {type(limit)}; expected int()") from None
 
-        qry = "SELECT generated AS generated, component, \
-            message FROM tbl_scan_log WHERE scan_instance_id = ? \
-            AND type = 'ERROR' ORDER BY generated DESC"
+        qry = ("SELECT generated, component, message FROM tbl_scan_log "
+               "WHERE scan_instance_id = %s AND type = 'ERROR' ORDER BY generated DESC")
         qvars = [instanceId]
 
         if limit:
-            qry += " LIMIT ?"
+            qry += " LIMIT %s"
             qvars.append(str(limit))
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching scan errors") from e
+        try:
+            self.dbh.execute(qry, qvars)
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching scan errors") from e
 
     def scanInstanceDelete(self, instanceId: str) -> bool:
-        """Delete a scan instance.
+        """Delete a scan instance and all associated data.
 
         Args:
             instanceId (str): scan instance ID
@@ -1268,39 +1100,26 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
 
-        qry1 = "DELETE FROM tbl_scan_instance WHERE guid = ?"
-        qry2 = "DELETE FROM tbl_scan_config WHERE scan_instance_id = ?"
-        qry3 = "DELETE FROM tbl_scan_results WHERE scan_instance_id = ?"
-        qry4 = "DELETE FROM tbl_scan_log WHERE scan_instance_id = ?"
-        qry5 = "DELETE FROM tbl_scan_ai_analysis WHERE scan_instance_id = ?"
-        qry6 = "DELETE FROM tbl_scan_ai_chat WHERE scan_instance_id = ?"
-        qvars = [instanceId]
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry1, qvars)
-                self.dbh.execute(qry2, qvars)
-                self.dbh.execute(qry3, qvars)
-                self.dbh.execute(qry4, qvars)
-                self.dbh.execute(qry5, qvars)
-                self.dbh.execute(qry6, qvars)
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when deleting scan") from e
+        # FK ON DELETE CASCADE handles child table cleanup; only need to delete parent
+        try:
+            self.dbh.execute("DELETE FROM tbl_scan_instance WHERE guid = %s", [instanceId])
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when deleting scan") from e
 
         return True
 
     def scanResultsUpdateFP(self, instanceId: str, resultHashes: list, fpFlag: int) -> bool:
-        """Set the false positive flag for a result.
+        """Set the false positive flag for a set of results.
 
         Args:
             instanceId (str): scan instance ID
             resultHashes (list): list of event hashes
-            fpFlag (int): false positive
+            fpFlag (int): false positive flag value
 
         Returns:
             bool: success
@@ -1309,27 +1128,21 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
         if not isinstance(resultHashes, list):
             raise TypeError(f"resultHashes is {type(resultHashes)}; expected list()") from None
 
-        with self.dbhLock:
-            for resultHash in resultHashes:
-                qry = "UPDATE tbl_scan_results SET false_positive = ? WHERE \
-                    scan_instance_id = ? AND hash = ?"
-                qvars = [fpFlag, instanceId, resultHash]
-                try:
-                    self.dbh.execute(qry, qvars)
-                except sqlite3.Error as e:
-                    raise IOError("SQL error encountered when updating false-positive") from e
+        qry = ("UPDATE tbl_scan_results SET false_positive = %s "
+               "WHERE scan_instance_id = %s AND hash = %s")
 
-            try:
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when updating false-positive") from e
+        try:
+            for resultHash in resultHashes:
+                self.dbh.execute(qry, [fpFlag, instanceId, resultHash])
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when updating false-positive") from e
 
         return True
 
@@ -1347,38 +1160,31 @@ class SpiderFootDb:
             ValueError: arg value was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(optMap, dict):
             raise TypeError(f"optMap is {type(optMap)}; expected dict()") from None
         if not optMap:
             raise ValueError("optMap is empty") from None
 
-        qry = "REPLACE INTO tbl_config (scope, opt, val) VALUES (?, ?, ?)"
+        qry = ("INSERT INTO tbl_config (scope, opt, val) VALUES (%s, %s, %s) "
+               "ON CONFLICT (scope, opt) DO UPDATE SET val = EXCLUDED.val")
 
-        with self.dbhLock:
+        try:
             for opt in list(optMap.keys()):
-                # Module option
                 if ":" in opt:
                     parts = opt.split(':')
                     qvals = [parts[0], parts[1], optMap[opt]]
                 else:
-                    # Global option
                     qvals = ["GLOBAL", opt, optMap[opt]]
-
-                try:
-                    self.dbh.execute(qry, qvals)
-                except sqlite3.Error as e:
-                    raise IOError("SQL error encountered when storing config, aborting") from e
-
-            try:
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when storing config, aborting") from e
+                self.dbh.execute(qry, qvals)
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when storing config, aborting") from e
 
         return True
 
     def configGet(self) -> dict:
-        """Retreive the config from the database
+        """Retrieve the config from the database.
 
         Returns:
             dict: config
@@ -1386,46 +1192,39 @@ class SpiderFootDb:
         Raises:
             IOError: database I/O failed
         """
-
         qry = "SELECT scope, opt, val FROM tbl_config"
-
         retval = dict()
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry)
-                for [scope, opt, val] in self.dbh.fetchall():
-                    if scope == "GLOBAL":
-                        retval[opt] = val
-                    else:
-                        retval[f"{scope}:{opt}"] = val
-
-                return retval
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching configuration") from e
+        try:
+            self.dbh.execute(qry)
+            for row in self.dbh.fetchall():
+                scope, opt, val = row[0], row[1], row[2]
+                if scope == "GLOBAL":
+                    retval[opt] = val
+                else:
+                    retval[f"{scope}:{opt}"] = val
+            return retval
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching configuration") from e
 
     def configClear(self) -> None:
         """Reset the config to default.
 
-        Clears the config from the database and lets the hard-coded settings in the code take effect.
-
         Raises:
             IOError: database I/O failed
         """
-
-        qry = "DELETE from tbl_config"
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry)
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("Unable to clear configuration from the database") from e
+        try:
+            self.dbh.execute("DELETE FROM tbl_config")
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("Unable to clear configuration from the database") from e
 
     def scanConfigSet(self, scan_id, optMap=dict()) -> None:
         """Store a configuration value for a scan.
 
         Args:
-            scan_id (int): scan instance ID
+            scan_id: scan instance ID
             optMap (dict): config options
 
         Raises:
@@ -1433,34 +1232,27 @@ class SpiderFootDb:
             ValueError: arg value was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(optMap, dict):
             raise TypeError(f"optMap is {type(optMap)}; expected dict()") from None
         if not optMap:
             raise ValueError("optMap is empty") from None
 
-        qry = "REPLACE INTO tbl_scan_config \
-                (scan_instance_id, component, opt, val) VALUES (?, ?, ?, ?)"
+        qry = ("INSERT INTO tbl_scan_config "
+               "(scan_instance_id, component, opt, val) VALUES (%s, %s, %s, %s) "
+               "ON CONFLICT (scan_instance_id, component, opt) DO UPDATE SET val = EXCLUDED.val")
 
-        with self.dbhLock:
+        try:
             for opt in list(optMap.keys()):
-                # Module option
                 if ":" in opt:
                     parts = opt.split(':')
                     qvals = [scan_id, parts[0], parts[1], optMap[opt]]
                 else:
-                    # Global option
                     qvals = [scan_id, "GLOBAL", opt, optMap[opt]]
-
-                try:
-                    self.dbh.execute(qry, qvals)
-                except sqlite3.Error as e:
-                    raise IOError("SQL error encountered when storing config, aborting") from e
-
-            try:
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when storing config, aborting") from e
+                self.dbh.execute(qry, qvals)
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when storing scan config, aborting") from e
 
     def scanConfigGet(self, instanceId: str) -> dict:
         """Retrieve configuration data for a scan component.
@@ -1475,35 +1267,32 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
 
-        qry = "SELECT component, opt, val FROM tbl_scan_config \
-                WHERE scan_instance_id = ? ORDER BY component, opt"
-        qvars = [instanceId]
-
+        qry = ("SELECT component, opt, val FROM tbl_scan_config "
+               "WHERE scan_instance_id = %s ORDER BY component, opt")
         retval = dict()
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                for [component, opt, val] in self.dbh.fetchall():
-                    if component == "GLOBAL":
-                        retval[opt] = val
-                    else:
-                        retval[f"{component}:{opt}"] = val
-                return retval
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching configuration") from e
+        try:
+            self.dbh.execute(qry, [instanceId])
+            for row in self.dbh.fetchall():
+                component, opt, val = row[0], row[1], row[2]
+                if component == "GLOBAL":
+                    retval[opt] = val
+                else:
+                    retval[f"{component}:{opt}"] = val
+            return retval
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching scan configuration") from e
 
     def scanEventStore(self, instanceId: str, sfEvent, truncateSize: int = 0) -> None:
         """Store an event in the database.
 
         Args:
             instanceId (str): scan instance ID
-            sfEvent (SpiderFootEvent): event to be stored in the database
-            truncateSize (int): truncate size for event data
+            sfEvent (SpiderFootEvent): event to store
+            truncateSize (int): truncate data to this size (0 = no truncation)
 
         Raises:
             TypeError: arg type was invalid
@@ -1514,86 +1303,67 @@ class SpiderFootDb:
 
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
         if not instanceId:
             raise ValueError("instanceId is empty") from None
-
         if not isinstance(sfEvent, SpiderFootEvent):
             raise TypeError(f"sfEvent is {type(sfEvent)}; expected SpiderFootEvent()") from None
-
         if not isinstance(sfEvent.generated, float):
             raise TypeError(f"sfEvent.generated is {type(sfEvent.generated)}; expected float()") from None
-
         if not sfEvent.generated:
             raise ValueError("sfEvent.generated is empty") from None
-
         if not isinstance(sfEvent.eventType, str):
             raise TypeError(f"sfEvent.eventType is {type(sfEvent.eventType,)}; expected str()") from None
-
         if not sfEvent.eventType:
             raise ValueError("sfEvent.eventType is empty") from None
-
         if not isinstance(sfEvent.data, str):
             raise TypeError(f"sfEvent.data is {type(sfEvent.data)}; expected str()") from None
-
         if not sfEvent.data:
             raise ValueError("sfEvent.data is empty") from None
-
         if not isinstance(sfEvent.module, str):
             raise TypeError(f"sfEvent.module is {type(sfEvent.module)}; expected str()") from None
-
         if not sfEvent.module and sfEvent.eventType != "ROOT":
             raise ValueError("sfEvent.module is empty") from None
-
         if not isinstance(sfEvent.confidence, int):
             raise TypeError(f"sfEvent.confidence is {type(sfEvent.confidence)}; expected int()") from None
-
         if not 0 <= sfEvent.confidence <= 100:
-            raise ValueError(f"sfEvent.confidence value is {type(sfEvent.confidence)}; expected 0 - 100") from None
-
+            raise ValueError(f"sfEvent.confidence value is {sfEvent.confidence}; expected 0 - 100") from None
         if not isinstance(sfEvent.visibility, int):
             raise TypeError(f"sfEvent.visibility is {type(sfEvent.visibility)}; expected int()") from None
-
         if not 0 <= sfEvent.visibility <= 100:
-            raise ValueError(f"sfEvent.visibility value is {type(sfEvent.visibility)}; expected 0 - 100") from None
-
+            raise ValueError(f"sfEvent.visibility value is {sfEvent.visibility}; expected 0 - 100") from None
         if not isinstance(sfEvent.risk, int):
             raise TypeError(f"sfEvent.risk is {type(sfEvent.risk)}; expected int()") from None
-
         if not 0 <= sfEvent.risk <= 100:
-            raise ValueError(f"sfEvent.risk value is {type(sfEvent.risk)}; expected 0 - 100") from None
-
+            raise ValueError(f"sfEvent.risk value is {sfEvent.risk}; expected 0 - 100") from None
         if not isinstance(sfEvent.sourceEvent, SpiderFootEvent) and sfEvent.eventType != "ROOT":
             raise TypeError(f"sfEvent.sourceEvent is {type(sfEvent.sourceEvent)}; expected str()") from None
-
         if not isinstance(sfEvent.sourceEventHash, str):
             raise TypeError(f"sfEvent.sourceEventHash is {type(sfEvent.sourceEventHash)}; expected str()") from None
-
         if not sfEvent.sourceEventHash:
             raise ValueError("sfEvent.sourceEventHash is empty") from None
 
         storeData = sfEvent.data
-
-        # truncate if required
         if isinstance(truncateSize, int) and truncateSize > 0:
             storeData = storeData[0:truncateSize]
 
-        # retrieve scan results
-        qry = "INSERT INTO tbl_scan_results \
-            (scan_instance_id, hash, type, generated, confidence, \
-            visibility, risk, module, data, source_event_hash) \
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        # PostgreSQL rejects null bytes in text fields; strip them from all string values.
+        storeData = storeData.replace('\x00', '')
 
-        qvals = [instanceId, sfEvent.hash, sfEvent.eventType, sfEvent.generated,
+        qry = ("INSERT INTO tbl_scan_results "
+               "(scan_instance_id, hash, type, generated, confidence, "
+               "visibility, risk, module, data, source_event_hash) "
+               "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+
+        qvals = [instanceId, sfEvent.hash, sfEvent.eventType.replace('\x00', ''), sfEvent.generated,
                  sfEvent.confidence, sfEvent.visibility, sfEvent.risk,
-                 sfEvent.module, storeData, sfEvent.sourceEventHash]
+                 sfEvent.module.replace('\x00', ''), storeData, sfEvent.sourceEventHash]
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvals)
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error encountered when storing event data ({self.dbh})") from e
+        try:
+            self.dbh.execute(qry, qvals)
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError(f"SQL error encountered when storing event data") from e
 
     def scanInstanceList(self) -> list:
         """List all previously run scans.
@@ -1604,27 +1374,20 @@ class SpiderFootDb:
         Raises:
             IOError: database I/O failed
         """
+        # PostgreSQL supports LEFT JOIN natively (no UNION workaround needed)
+        qry = ("SELECT i.guid, i.name, i.seed_target, ROUND(i.created/1000.0)::float, "
+               "ROUND(i.started/1000.0)::float AS started, ROUND(i.ended/1000.0)::float, i.status, "
+               "COUNT(r.hash) "
+               "FROM tbl_scan_instance i "
+               "LEFT JOIN tbl_scan_results r ON i.guid = r.scan_instance_id AND r.type <> 'ROOT' "
+               "GROUP BY i.guid, i.name, i.seed_target, i.created, i.started, i.ended, i.status "
+               "ORDER BY started DESC")
 
-        # SQLite doesn't support OUTER JOINs, so we need a work-around that
-        # does a UNION of scans with results and scans without results to
-        # get a complete listing.
-        qry = "SELECT i.guid, i.name, i.seed_target, ROUND(i.created/1000), \
-            ROUND(i.started)/1000 as started, ROUND(i.ended)/1000, i.status, COUNT(r.type) \
-            FROM tbl_scan_instance i, tbl_scan_results r WHERE i.guid = r.scan_instance_id \
-            AND r.type <> 'ROOT' GROUP BY i.guid \
-            UNION ALL \
-            SELECT i.guid, i.name, i.seed_target, ROUND(i.created/1000), \
-            ROUND(i.started)/1000 as started, ROUND(i.ended)/1000, i.status, '0' \
-            FROM tbl_scan_instance i  WHERE i.guid NOT IN ( \
-            SELECT distinct scan_instance_id FROM tbl_scan_results WHERE type <> 'ROOT') \
-            ORDER BY started DESC"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching scan list") from e
+        try:
+            self.dbh.execute(qry)
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching scan list") from e
 
     def scanResultHistory(self, instanceId: str) -> list:
         """History of data from the scan.
@@ -1639,154 +1402,132 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
 
-        qry = "SELECT STRFTIME('%H:%M %w', generated, 'unixepoch') AS hourmin, \
-                type, COUNT(*) FROM tbl_scan_results \
-                WHERE scan_instance_id = ? GROUP BY hourmin, type"
-        qvars = [instanceId]
+        # generated is stored in seconds (sfEvent.generated = time.time())
+        # to_char(to_timestamp(seconds), ...) converts correctly in PostgreSQL
+        qry = ("SELECT to_char(to_timestamp(generated), 'HH24:MI D') AS hourmin, "
+               "type, COUNT(*) FROM tbl_scan_results "
+               "WHERE scan_instance_id = %s GROUP BY hourmin, type")
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error encountered when fetching history for scan {instanceId}") from e
+        try:
+            self.dbh.execute(qry, [instanceId])
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError(f"SQL error encountered when fetching history for scan {instanceId}") from e
 
     def scanElementSourcesDirect(self, instanceId: str, elementIdList: list) -> list:
         """Get the source IDs, types and data for a set of IDs.
 
         Args:
             instanceId (str): scan instance ID
-            elementIdList (list): TBD
+            elementIdList (list): list of hash IDs
 
         Returns:
-            list: TBD
+            list: source elements
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
         if not isinstance(elementIdList, list):
             raise TypeError(f"elementIdList is {type(elementIdList)}; expected list()") from None
 
-        hashIds = []
-        for hashId in elementIdList:
-            if not hashId:
-                continue
-            if not hashId.isalnum():
-                continue
-            hashIds.append(hashId)
+        hashIds = [h for h in elementIdList if h and h.isalnum()]
+        if not hashIds:
+            return []
 
-        # the output of this needs to be aligned with scanResultEvent,
-        # as other functions call both expecting the same output.
-        qry = "SELECT ROUND(c.generated) AS generated, c.data, \
-            s.data as 'source_data', \
-            c.module, c.type, c.confidence, c.visibility, c.risk, c.hash, \
-            c.source_event_hash, t.event_descr, t.event_type, s.scan_instance_id, \
-            c.false_positive as 'fp', s.false_positive as 'parent_fp', \
-            s.type, s.module, st.event_type as 'source_entity_type' \
-            FROM tbl_scan_results c, tbl_scan_results s, tbl_event_types t, \
-            tbl_event_types st \
-            WHERE c.scan_instance_id = ? AND c.source_event_hash = s.hash AND \
-            s.scan_instance_id = c.scan_instance_id AND st.event = s.type AND \
-            t.event = c.type AND c.hash in ('%s')" % "','".join(hashIds)
-        qvars = [instanceId]
+        placeholders = ','.join(['%s'] * len(hashIds))
+        qry = ("SELECT ROUND(c.generated) AS generated, c.data, "
+               "s.data as source_data, "
+               "c.module, c.type, c.confidence, c.visibility, c.risk, c.hash, "
+               "c.source_event_hash, t.event_descr, t.event_type, s.scan_instance_id, "
+               "c.false_positive as fp, s.false_positive as parent_fp, "
+               "s.type, s.module, st.event_type as source_entity_type "
+               "FROM tbl_scan_results c, tbl_scan_results s, tbl_event_types t, "
+               "tbl_event_types st "
+               "WHERE c.scan_instance_id = %s AND c.source_event_hash = s.hash AND "
+               "s.scan_instance_id = c.scan_instance_id AND st.event = s.type AND "
+               f"t.event = c.type AND c.hash IN ({placeholders})")
+        qvars = [instanceId] + hashIds
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when getting source element IDs") from e
+        try:
+            self.dbh.execute(qry, qvars)
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when getting source element IDs") from e
 
     def scanElementChildrenDirect(self, instanceId: str, elementIdList: list) -> list:
         """Get the child IDs, types and data for a set of IDs.
 
         Args:
             instanceId (str): scan instance ID
-            elementIdList (list): TBD
+            elementIdList (list): list of hash IDs
 
         Returns:
-            list: TBD
+            list: child elements
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()")
-
         if not isinstance(elementIdList, list):
             raise TypeError(f"elementIdList is {type(elementIdList)}; expected list()")
 
-        hashIds = []
-        for hashId in elementIdList:
-            if not hashId:
-                continue
-            if not hashId.isalnum():
-                continue
-            hashIds.append(hashId)
+        hashIds = [h for h in elementIdList if h and h.isalnum()]
+        if not hashIds:
+            return []
 
-        # the output of this needs to be aligned with scanResultEvent,
-        # as other functions call both expecting the same output.
-        qry = "SELECT ROUND(c.generated) AS generated, c.data, \
-            s.data as 'source_data', \
-            c.module, c.type, c.confidence, c.visibility, c.risk, c.hash, \
-            c.source_event_hash, t.event_descr, t.event_type, s.scan_instance_id, \
-            c.false_positive as 'fp', s.false_positive as 'parent_fp' \
-            FROM tbl_scan_results c, tbl_scan_results s, tbl_event_types t \
-            WHERE c.scan_instance_id = ? AND c.source_event_hash = s.hash AND \
-            s.scan_instance_id = c.scan_instance_id AND \
-            t.event = c.type AND s.hash in ('%s')" % "','".join(hashIds)
-        qvars = [instanceId]
+        placeholders = ','.join(['%s'] * len(hashIds))
+        qry = ("SELECT ROUND(c.generated) AS generated, c.data, "
+               "s.data as source_data, "
+               "c.module, c.type, c.confidence, c.visibility, c.risk, c.hash, "
+               "c.source_event_hash, t.event_descr, t.event_type, s.scan_instance_id, "
+               "c.false_positive as fp, s.false_positive as parent_fp "
+               "FROM tbl_scan_results c, tbl_scan_results s, tbl_event_types t "
+               "WHERE c.scan_instance_id = %s AND c.source_event_hash = s.hash AND "
+               "s.scan_instance_id = c.scan_instance_id AND "
+               f"t.event = c.type AND s.hash IN ({placeholders})")
+        qvars = [instanceId] + hashIds
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, qvars)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when getting child element IDs") from e
+        try:
+            self.dbh.execute(qry, qvars)
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when getting child element IDs") from e
 
     def scanElementSourcesAll(self, instanceId: str, childData: list) -> list:
         """Get the full set of upstream IDs which are parents to the supplied set of IDs.
 
         Args:
             instanceId (str): scan instance ID
-            childData (list): TBD
+            childData (list): initial child rows
 
         Returns:
-            list: TBD
+            list: [datamap, parent-child dict]
 
         Raises:
             TypeError: arg type was invalid
             ValueError: arg value was invalid
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()")
-
         if not isinstance(childData, list):
             raise TypeError(f"childData is {type(childData)}; expected list()")
-
         if not childData:
             raise ValueError("childData is empty")
 
-        # Get the first round of source IDs for the leafs
         keepGoing = True
         nextIds = list()
         datamap = dict()
         pc = dict()
 
         for row in childData:
-            # these must be unique values!
             parentId = row[9]
             childId = row[8]
             datamap[childId] = row
@@ -1797,7 +1538,6 @@ class SpiderFootDb:
             else:
                 pc[parentId] = [childId]
 
-            # parents of the leaf set
             if parentId not in nextIds:
                 nextIds.append(parentId)
 
@@ -1819,7 +1559,6 @@ class SpiderFootDb:
                 if parentId not in nextIds:
                     nextIds.append(parentId)
 
-                # Prevent us from looping at root
                 if parentId != "ROOT":
                     keepGoing = True
 
@@ -1831,21 +1570,16 @@ class SpiderFootDb:
 
         Args:
             instanceId (str): scan instance ID
-            parentIds (list): TBD
+            parentIds (list): initial parent IDs
 
         Returns:
-            list: TBD
+            list: child IDs
 
         Raises:
             TypeError: arg type was invalid
-
-        Note: This function is not the same as the scanElementParent* functions.
-              This function returns only ids.
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()")
-
         if not isinstance(parentIds, list):
             raise TypeError(f"parentIds is {type(parentIds)}; expected list()")
 
@@ -1889,81 +1623,64 @@ class SpiderFootDb:
 
         Args:
             instanceId (str): scan instance ID
-            ruleId(str): correlation rule ID
-            ruleName(str): correlation rule name
-            ruleDescr(str): correlation rule description
-            ruleRisk(str): correlation rule risk level
-            ruleYaml(str): correlation rule raw YAML
-            correlationTitle(str): correlation title
-            eventHashes(list): events mapped to the correlation result
+            ruleId (str): correlation rule ID
+            ruleName (str): correlation rule name
+            ruleDescr (str): correlation rule description
+            ruleRisk (str): correlation rule risk level
+            ruleYaml (str): correlation rule raw YAML
+            correlationTitle (str): correlation title
+            eventHashes (list): events mapped to the correlation result
+
+        Returns:
+            str: correlation ID
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
-
-        Returns:
-            str: Correlation ID created
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()")
-
         if not isinstance(ruleId, str):
             raise TypeError(f"ruleId is {type(ruleId)}; expected str()")
-
         if not isinstance(ruleName, str):
             raise TypeError(f"ruleName is {type(ruleName)}; expected str()")
-
         if not isinstance(ruleDescr, str):
             raise TypeError(f"ruleDescr is {type(ruleDescr)}; expected str()")
-
         if not isinstance(ruleRisk, str):
             raise TypeError(f"ruleRisk is {type(ruleRisk)}; expected str()")
-
         if not isinstance(ruleYaml, str):
             raise TypeError(f"ruleYaml is {type(ruleYaml)}; expected str()")
-
         if not isinstance(correlationTitle, str):
             raise TypeError(f"correlationTitle is {type(correlationTitle)}; expected str()")
-
         if not isinstance(eventHashes, list):
             raise TypeError(f"eventHashes is {type(eventHashes)}; expected list()")
 
-        uniqueId = str(hashlib.md5(str(time.time() + random.SystemRandom().randint(0, 99999999)).encode('utf-8')).hexdigest())  # noqa: DUO130
+        uniqueId = hashlib.md5(  # noqa: DUO130
+            str(time.time() + random.SystemRandom().randint(0, 99999999)).encode('utf-8')
+        ).hexdigest()
 
-        qry = "INSERT INTO tbl_scan_correlation_results \
-            (id, scan_instance_id, title, rule_name, rule_descr, rule_risk, rule_id, rule_logic) \
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        try:
+            self.dbh.execute(
+                "INSERT INTO tbl_scan_correlation_results "
+                "(id, scan_instance_id, title, rule_name, rule_descr, rule_risk, rule_id, rule_logic) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (uniqueId, instanceId, correlationTitle, ruleName, ruleDescr, ruleRisk, ruleId, ruleYaml)
+            )
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, (
-                    uniqueId, instanceId, correlationTitle, ruleName, ruleDescr, ruleRisk, ruleId, ruleYaml
-                ))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("Unable to create correlation result in database") from e
+            if eventHashes:
+                self.dbh.executemany(
+                    "INSERT INTO tbl_scan_correlation_results_events (correlation_id, event_hash) VALUES (%s, %s)",
+                    [(uniqueId, h) for h in eventHashes]
+                )
 
-        # Map events to the correlation result
-        qry = "INSERT INTO tbl_scan_correlation_results_events \
-            (correlation_id, event_hash) \
-            VALUES (?, ?)"
-
-        with self.dbhLock:
-            for eventHash in eventHashes:
-                try:
-                    self.dbh.execute(qry, (
-                        uniqueId, eventHash
-                    ))
-                    self.conn.commit()
-                except sqlite3.Error as e:
-                    raise IOError("Unable to create correlation result in database") from e
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("Unable to create correlation result in database") from e
 
         return uniqueId
 
-    # ------------------------------------------------------------------
-    # AI Analysis Methods
-    # ------------------------------------------------------------------
+    # ── AI Analysis Methods ────────────────────────────────────────────────
 
     def aiAnalysisCreate(self, instanceId: str, provider: str, model: str, mode: str) -> str:
         """Create an AI analysis record.
@@ -1981,30 +1698,26 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
-
         if not isinstance(provider, str):
             raise TypeError(f"provider is {type(provider)}; expected str()") from None
 
-        uniqueId = str(hashlib.md5(
+        uniqueId = hashlib.md5(  # noqa: DUO130
             str(time.time() + random.SystemRandom().randint(0, 99999999)).encode('utf-8')
-        ).hexdigest())  # noqa: DUO130
+        ).hexdigest()
 
-        qry = "INSERT INTO tbl_scan_ai_analysis \
-            (id, scan_instance_id, provider, model, mode, created, status) \
-            VALUES (?, ?, ?, ?, ?, ?, ?)"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, (
-                    uniqueId, instanceId, provider, model, mode,
-                    int(time.time() * 1000), 'running'
-                ))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("Unable to create AI analysis record in database") from e
+        try:
+            self.dbh.execute(
+                "INSERT INTO tbl_scan_ai_analysis "
+                "(id, scan_instance_id, provider, model, mode, created, status) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (uniqueId, instanceId, provider, model, mode, int(time.time() * 1000), 'running')
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("Unable to create AI analysis record in database") from e
 
         return uniqueId
 
@@ -2024,32 +1737,31 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(analysisId, str):
             raise TypeError(f"analysisId is {type(analysisId)}; expected str()") from None
 
-        sets = ["status = ?"]
+        sets = ["status = %s"]
         vals = [status]
 
         if resultJson is not None:
-            sets.append("result_json = ?")
+            sets.append("result_json = %s")
             vals.append(resultJson)
         if tokenUsage is not None:
-            sets.append("token_usage = ?")
+            sets.append("token_usage = %s")
             vals.append(tokenUsage)
         if error is not None:
-            sets.append("error = ?")
+            sets.append("error = %s")
             vals.append(error)
 
         vals.append(analysisId)
-        qry = f"UPDATE tbl_scan_ai_analysis SET {', '.join(sets)} WHERE id = ?"
+        qry = f"UPDATE tbl_scan_ai_analysis SET {', '.join(sets)} WHERE id = %s"
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, vals)
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("Unable to update AI analysis record in database") from e
+        try:
+            self.dbh.execute(qry, vals)
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("Unable to update AI analysis record in database") from e
 
     def aiAnalysisGet(self, instanceId: str) -> list:
         """Get all AI analyses for a scan, ordered by most recent first.
@@ -2058,27 +1770,26 @@ class SpiderFootDb:
             instanceId (str): scan instance ID
 
         Returns:
-            list: list of analysis rows
+            list: analysis rows
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
 
-        qry = "SELECT id, scan_instance_id, provider, model, mode, created, \
-            status, result_json, token_usage, error \
-            FROM tbl_scan_ai_analysis WHERE scan_instance_id = ? \
-            ORDER BY created DESC"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, [instanceId])
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching AI analyses") from e
+        try:
+            self.dbh.execute(
+                "SELECT id, scan_instance_id, provider, model, mode, created, "
+                "status, result_json, token_usage, error "
+                "FROM tbl_scan_ai_analysis WHERE scan_instance_id = %s "
+                "ORDER BY created DESC",
+                [instanceId]
+            )
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching AI analyses") from e
 
     def aiAnalysisGetById(self, analysisId: str) -> list:
         """Get a single AI analysis by ID.
@@ -2087,26 +1798,25 @@ class SpiderFootDb:
             analysisId (str): analysis ID
 
         Returns:
-            list: analysis row or None
+            tuple | None: analysis row or None
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(analysisId, str):
             raise TypeError(f"analysisId is {type(analysisId)}; expected str()") from None
 
-        qry = "SELECT id, scan_instance_id, provider, model, mode, created, \
-            status, result_json, token_usage, error \
-            FROM tbl_scan_ai_analysis WHERE id = ?"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, [analysisId])
-                return self.dbh.fetchone()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching AI analysis") from e
+        try:
+            self.dbh.execute(
+                "SELECT id, scan_instance_id, provider, model, mode, created, "
+                "status, result_json, token_usage, error "
+                "FROM tbl_scan_ai_analysis WHERE id = %s",
+                [analysisId]
+            )
+            return self.dbh.fetchone()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching AI analysis") from e
 
     def aiAnalysisDelete(self, analysisId: str) -> bool:
         """Delete an AI analysis record.
@@ -2121,25 +1831,21 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(analysisId, str):
             raise TypeError(f"analysisId is {type(analysisId)}; expected str()") from None
 
-        qry = "DELETE FROM tbl_scan_ai_analysis WHERE id = ?"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, [analysisId])
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when deleting AI analysis") from e
+        try:
+            self.dbh.execute("DELETE FROM tbl_scan_ai_analysis WHERE id = %s", [analysisId])
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when deleting AI analysis") from e
 
         return True
 
-    # ── AI Chat (Natural Language Query) ──────────────────────────────────
+    # ── AI Chat ────────────────────────────────────────────────────────────
 
-    def aiChatCreate(self, instanceId: str, role: str, content: str,
-                     tokenUsage: int = 0) -> str:
+    def aiChatCreate(self, instanceId: str, role: str, content: str, tokenUsage: int = 0) -> str:
         """Insert a chat message for a scan.
 
         Args:
@@ -2155,7 +1861,6 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
         if not isinstance(role, str):
@@ -2167,19 +1872,17 @@ class SpiderFootDb:
             str(time.time() + random.SystemRandom().randint(0, 99999999)).encode('utf-8')
         ).hexdigest()
 
-        qry = "INSERT INTO tbl_scan_ai_chat \
-            (id, scan_instance_id, role, content, token_usage, created) \
-            VALUES (?, ?, ?, ?, ?, ?)"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, (
-                    uniqueId, instanceId, role, content,
-                    tokenUsage, int(time.time() * 1000)
-                ))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when creating AI chat message") from e
+        try:
+            self.dbh.execute(
+                "INSERT INTO tbl_scan_ai_chat "
+                "(id, scan_instance_id, role, content, token_usage, created) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (uniqueId, instanceId, role, content, tokenUsage, int(time.time() * 1000))
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when creating AI chat message") from e
 
         return uniqueId
 
@@ -2190,26 +1893,24 @@ class SpiderFootDb:
             instanceId (str): scan instance ID
 
         Returns:
-            list: rows of [id, scan_instance_id, role, content, token_usage, created]
+            list: rows of (id, scan_instance_id, role, content, token_usage, created)
 
         Raises:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
 
-        qry = "SELECT id, scan_instance_id, role, content, token_usage, created \
-            FROM tbl_scan_ai_chat WHERE scan_instance_id = ? \
-            ORDER BY created ASC"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, [instanceId])
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching AI chat messages") from e
+        try:
+            self.dbh.execute(
+                "SELECT id, scan_instance_id, role, content, token_usage, created "
+                "FROM tbl_scan_ai_chat WHERE scan_instance_id = %s ORDER BY created ASC",
+                [instanceId]
+            )
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching AI chat messages") from e
 
     def aiChatDeleteAll(self, instanceId: str) -> bool:
         """Delete all chat messages for a scan.
@@ -2224,18 +1925,15 @@ class SpiderFootDb:
             TypeError: arg type was invalid
             IOError: database I/O failed
         """
-
         if not isinstance(instanceId, str):
             raise TypeError(f"instanceId is {type(instanceId)}; expected str()") from None
 
-        qry = "DELETE FROM tbl_scan_ai_chat WHERE scan_instance_id = ?"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, [instanceId])
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when deleting AI chat messages") from e
+        try:
+            self.dbh.execute("DELETE FROM tbl_scan_ai_chat WHERE scan_instance_id = %s", [instanceId])
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when deleting AI chat messages") from e
 
         return True
 
@@ -2245,7 +1943,7 @@ class SpiderFootDb:
         """Create a user-defined correlation rule.
 
         Args:
-            ruleId (str): unique rule identifier (must match YAML id field)
+            ruleId (str): unique rule identifier
             yamlContent (str): full YAML content of the rule
 
         Returns:
@@ -2263,16 +1961,17 @@ class SpiderFootDb:
         now = int(time.time() * 1000)
         id_str = hashlib.md5(f"{ruleId}{now}".encode('utf-8', errors='replace')).hexdigest()
 
-        qry = "INSERT INTO tbl_correlation_rules \
-            (id, rule_id, yaml_content, enabled, created, updated) \
-            VALUES (?, ?, ?, 1, ?, ?)"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, (id_str, ruleId, yamlContent, now, now))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when creating correlation rule") from e
+        try:
+            self.dbh.execute(
+                "INSERT INTO tbl_correlation_rules "
+                "(id, rule_id, yaml_content, enabled, created, updated) "
+                "VALUES (%s, %s, %s, 1, %s, %s)",
+                (id_str, ruleId, yamlContent, now, now)
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when creating correlation rule") from e
 
         return id_str
 
@@ -2293,14 +1992,15 @@ class SpiderFootDb:
             raise TypeError(f"yamlContent is {type(yamlContent)}; expected str()") from None
 
         now = int(time.time() * 1000)
-        qry = "UPDATE tbl_correlation_rules SET yaml_content = ?, updated = ? WHERE rule_id = ?"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, (yamlContent, now, ruleId))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when updating correlation rule") from e
+        try:
+            self.dbh.execute(
+                "UPDATE tbl_correlation_rules SET yaml_content = %s, updated = %s WHERE rule_id = %s",
+                (yamlContent, now, ruleId)
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when updating correlation rule") from e
 
     def correlationRuleDelete(self, ruleId: str) -> None:
         """Delete a user-defined correlation rule.
@@ -2315,14 +2015,12 @@ class SpiderFootDb:
         if not isinstance(ruleId, str):
             raise TypeError(f"ruleId is {type(ruleId)}; expected str()") from None
 
-        qry = "DELETE FROM tbl_correlation_rules WHERE rule_id = ?"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, [ruleId])
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when deleting correlation rule") from e
+        try:
+            self.dbh.execute("DELETE FROM tbl_correlation_rules WHERE rule_id = %s", [ruleId])
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when deleting correlation rule") from e
 
     def correlationRuleGet(self, ruleId: str) -> list:
         """Get a user-defined correlation rule.
@@ -2331,7 +2029,7 @@ class SpiderFootDb:
             ruleId (str): rule identifier
 
         Returns:
-            list: [id, rule_id, yaml_content, enabled, created, updated] or empty list
+            tuple | list: (id, rule_id, yaml_content, enabled, created, updated) or empty list
 
         Raises:
             TypeError: argument type was invalid
@@ -2340,35 +2038,33 @@ class SpiderFootDb:
         if not isinstance(ruleId, str):
             raise TypeError(f"ruleId is {type(ruleId)}; expected str()") from None
 
-        qry = "SELECT id, rule_id, yaml_content, enabled, created, updated \
-            FROM tbl_correlation_rules WHERE rule_id = ?"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, [ruleId])
-                return self.dbh.fetchone() or []
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching correlation rule") from e
+        try:
+            self.dbh.execute(
+                "SELECT id, rule_id, yaml_content, enabled, created, updated "
+                "FROM tbl_correlation_rules WHERE rule_id = %s",
+                [ruleId]
+            )
+            return self.dbh.fetchone() or []
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching correlation rule") from e
 
     def correlationRuleGetAll(self) -> list:
         """Get all user-defined correlation rules.
 
         Returns:
-            list: list of [id, rule_id, yaml_content, enabled, created, updated]
+            list: list of (id, rule_id, yaml_content, enabled, created, updated)
 
         Raises:
             IOError: database I/O failed
         """
-
-        qry = "SELECT id, rule_id, yaml_content, enabled, created, updated \
-            FROM tbl_correlation_rules ORDER BY created DESC"
-
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry)
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when fetching correlation rules") from e
+        try:
+            self.dbh.execute(
+                "SELECT id, rule_id, yaml_content, enabled, created, updated "
+                "FROM tbl_correlation_rules ORDER BY created DESC"
+            )
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError("SQL error encountered when fetching correlation rules") from e
 
     def correlationRuleToggle(self, ruleId: str, enabled: bool) -> None:
         """Enable or disable a user-defined correlation rule.
@@ -2385,20 +2081,18 @@ class SpiderFootDb:
             raise TypeError(f"ruleId is {type(ruleId)}; expected str()") from None
 
         now = int(time.time() * 1000)
-        qry = "UPDATE tbl_correlation_rules SET enabled = ?, updated = ? WHERE rule_id = ?"
+        try:
+            self.dbh.execute(
+                "UPDATE tbl_correlation_rules SET enabled = %s, updated = %s WHERE rule_id = %s",
+                (1 if enabled else 0, now, ruleId)
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError("SQL error encountered when toggling correlation rule") from e
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(qry, (1 if enabled else 0, now, ruleId))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError("SQL error encountered when toggling correlation rule") from e
+    # ── RBAC seed data, users, roles, permissions, audit log ──────────────
 
-    # ──────────────────────────────────────────────────────────────────────
-    #  RBAC: seed data, users, roles, permissions, audit log
-    # ──────────────────────────────────────────────────────────────────────
-
-    # Role / permission definitions used for seeding
     _RBAC_ROLES = [
         ("administrator", "Administrator", "Full access to all features"),
         ("analyst", "Analyst", "Can run scans, view results, manage rules and AI features"),
@@ -2449,47 +2143,44 @@ class SpiderFootDb:
     }
 
     def _seed_rbac_data(self) -> None:
-        """Seed roles, permissions, and role-permission mappings.
+        """Seed roles, permissions, and role-permission mappings (idempotent)."""
+        try:
+            for role_name, display, desc in self._RBAC_ROLES:
+                role_id = hashlib.md5(role_name.encode('utf-8', errors='replace')).hexdigest()
+                self.dbh.execute(
+                    "INSERT INTO tbl_roles (id, name, description) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (id) DO NOTHING",
+                    (role_id, role_name, desc)
+                )
 
-        Uses INSERT OR IGNORE so it's safe to call on every startup.
-        """
-        with self.dbhLock:
-            try:
-                # Seed roles
-                for role_name, display, desc in self._RBAC_ROLES:
-                    role_id = hashlib.md5(role_name.encode('utf-8', errors='replace')).hexdigest()
-                    self.dbh.execute(
-                        "INSERT OR IGNORE INTO tbl_roles (id, name, description) VALUES (?, ?, ?)",
-                        (role_id, role_name, desc)
-                    )
+            perm_id_map = {}
+            for resource, action in self._RBAC_PERMISSIONS:
+                perm_key = f"{resource}:{action}"
+                perm_id = hashlib.md5(perm_key.encode('utf-8', errors='replace')).hexdigest()
+                perm_id_map[perm_key] = perm_id
+                self.dbh.execute(
+                    "INSERT INTO tbl_permissions (id, resource, action) VALUES (%s, %s, %s) "
+                    "ON CONFLICT (id) DO NOTHING",
+                    (perm_id, resource, action)
+                )
 
-                # Seed permissions
-                perm_id_map = {}
-                for resource, action in self._RBAC_PERMISSIONS:
-                    perm_key = f"{resource}:{action}"
-                    perm_id = hashlib.md5(perm_key.encode('utf-8', errors='replace')).hexdigest()
-                    perm_id_map[perm_key] = perm_id
-                    self.dbh.execute(
-                        "INSERT OR IGNORE INTO tbl_permissions (id, resource, action) VALUES (?, ?, ?)",
-                        (perm_id, resource, action)
-                    )
+            for role_name, perms in self._ROLE_PERMISSIONS.items():
+                role_id = hashlib.md5(role_name.encode('utf-8', errors='replace')).hexdigest()
+                for perm_key in perms:
+                    perm_id = perm_id_map.get(perm_key)
+                    if perm_id:
+                        self.dbh.execute(
+                            "INSERT INTO tbl_role_permissions (role_id, permission_id) VALUES (%s, %s) "
+                            "ON CONFLICT (role_id, permission_id) DO NOTHING",
+                            (role_id, perm_id)
+                        )
 
-                # Seed role-permission mappings
-                for role_name, perms in self._ROLE_PERMISSIONS.items():
-                    role_id = hashlib.md5(role_name.encode('utf-8', errors='replace')).hexdigest()
-                    for perm_key in perms:
-                        perm_id = perm_id_map.get(perm_key)
-                        if perm_id:
-                            self.dbh.execute(
-                                "INSERT OR IGNORE INTO tbl_role_permissions (role_id, permission_id) VALUES (?, ?)",
-                                (role_id, perm_id)
-                            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            log.error(f"Failed to seed RBAC data: {e}")
 
-                self.conn.commit()
-            except sqlite3.Error as e:
-                log.error(f"Failed to seed RBAC data: {e}")
-
-    # ── User CRUD ────────────────────────────────────────────────────────
+    # ── User CRUD ──────────────────────────────────────────────────────────
 
     def userCreate(self, username: str, password_hash: str,
                    display_name: str = "", email: str = "") -> str:
@@ -2507,51 +2198,56 @@ class SpiderFootDb:
         Raises:
             IOError: database I/O failed
         """
-        user_id = hashlib.md5(f"{username}{time.time()}{random.SystemRandom().randint(0, 99999999)}".encode(
-            'utf-8', errors='replace')).hexdigest()
+        user_id = hashlib.md5(
+            f"{username}{time.time()}{random.SystemRandom().randint(0, 99999999)}".encode(
+                'utf-8', errors='replace')
+        ).hexdigest()
         now = int(time.time() * 1000)
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "INSERT INTO tbl_users (id, username, password, display_name, email, is_active, created, updated) "
-                    "VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
-                    (user_id, username, password_hash, display_name, email, now, now)
-                )
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error creating user: {e}") from e
+        try:
+            self.dbh.execute(
+                "INSERT INTO tbl_users (id, username, password, display_name, email, is_active, created, updated) "
+                "VALUES (%s, %s, %s, %s, %s, 1, %s, %s)",
+                (user_id, username, password_hash, display_name, email, now, now)
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError(f"SQL error creating user: {e}") from e
+
         return user_id
 
     def userGet(self, user_id: str):
         """Get a user by ID.
 
         Returns:
-            tuple: (id, username, password, display_name, email, is_active, created, updated) or None
+            tuple | None: (id, username, password, display_name, email, is_active, created, updated)
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "SELECT id, username, password, display_name, email, is_active, created, updated "
-                    "FROM tbl_users WHERE id = ?", [user_id])
-                return self.dbh.fetchone()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error fetching user: {e}") from e
+        try:
+            self.dbh.execute(
+                "SELECT id, username, password, display_name, email, is_active, created, updated "
+                "FROM tbl_users WHERE id = %s",
+                [user_id]
+            )
+            return self.dbh.fetchone()
+        except psycopg2.Error as e:
+            raise IOError(f"SQL error fetching user: {e}") from e
 
     def userGetByUsername(self, username: str):
         """Get a user by username.
 
         Returns:
-            tuple: (id, username, password, display_name, email, is_active, created, updated) or None
+            tuple | None: (id, username, password, display_name, email, is_active, created, updated)
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "SELECT id, username, password, display_name, email, is_active, created, updated "
-                    "FROM tbl_users WHERE username = ?", [username])
-                return self.dbh.fetchone()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error fetching user by username: {e}") from e
+        try:
+            self.dbh.execute(
+                "SELECT id, username, password, display_name, email, is_active, created, updated "
+                "FROM tbl_users WHERE username = %s",
+                [username]
+            )
+            return self.dbh.fetchone()
+        except psycopg2.Error as e:
+            raise IOError(f"SQL error fetching user by username: {e}") from e
 
     def userList(self) -> list:
         """Get all users.
@@ -2559,14 +2255,14 @@ class SpiderFootDb:
         Returns:
             list: list of (id, username, password, display_name, email, is_active, created, updated)
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "SELECT id, username, password, display_name, email, is_active, created, updated "
-                    "FROM tbl_users ORDER BY created")
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error listing users: {e}") from e
+        try:
+            self.dbh.execute(
+                "SELECT id, username, password, display_name, email, is_active, created, updated "
+                "FROM tbl_users ORDER BY created"
+            )
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError(f"SQL error listing users: {e}") from e
 
     def userUpdate(self, user_id: str, **fields) -> None:
         """Update user fields.
@@ -2579,41 +2275,43 @@ class SpiderFootDb:
             return
 
         updates["updated"] = int(time.time() * 1000)
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        set_clause = ", ".join(f"{k} = %s" for k in updates)
         values = list(updates.values()) + [user_id]
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(f"UPDATE tbl_users SET {set_clause} WHERE id = ?", values)
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error updating user: {e}") from e
+        try:
+            self.dbh.execute(f"UPDATE tbl_users SET {set_clause} WHERE id = %s", values)
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError(f"SQL error updating user: {e}") from e
 
     def userSetPassword(self, user_id: str, password_hash: str) -> None:
         """Update a user's password."""
         now = int(time.time() * 1000)
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "UPDATE tbl_users SET password = ?, updated = ? WHERE id = ?",
-                    (password_hash, now, user_id))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error updating password: {e}") from e
+        try:
+            self.dbh.execute(
+                "UPDATE tbl_users SET password = %s, updated = %s WHERE id = %s",
+                (password_hash, now, user_id)
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError(f"SQL error updating password: {e}") from e
 
     def userSetActive(self, user_id: str, is_active: bool) -> None:
         """Enable or disable a user."""
         now = int(time.time() * 1000)
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "UPDATE tbl_users SET is_active = ?, updated = ? WHERE id = ?",
-                    (1 if is_active else 0, now, user_id))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error setting user active state: {e}") from e
+        try:
+            self.dbh.execute(
+                "UPDATE tbl_users SET is_active = %s, updated = %s WHERE id = %s",
+                (1 if is_active else 0, now, user_id)
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError(f"SQL error setting user active state: {e}") from e
 
-    # ── Role methods ─────────────────────────────────────────────────────
+    # ── Role methods ───────────────────────────────────────────────────────
 
     def userRolesGet(self, user_id: str) -> list:
         """Get role names for a user.
@@ -2621,15 +2319,16 @@ class SpiderFootDb:
         Returns:
             list: role name strings, e.g. ['administrator']
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "SELECT r.name FROM tbl_roles r "
-                    "JOIN tbl_user_roles ur ON ur.role_id = r.id "
-                    "WHERE ur.user_id = ?", [user_id])
-                return [row[0] for row in self.dbh.fetchall()]
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error fetching user roles: {e}") from e
+        try:
+            self.dbh.execute(
+                "SELECT r.name FROM tbl_roles r "
+                "JOIN tbl_user_roles ur ON ur.role_id = r.id "
+                "WHERE ur.user_id = %s",
+                [user_id]
+            )
+            return [row[0] for row in self.dbh.fetchall()]
+        except psycopg2.Error as e:
+            raise IOError(f"SQL error fetching user roles: {e}") from e
 
     def userRolesSet(self, user_id: str, role_ids: list) -> None:
         """Replace all roles for a user.
@@ -2638,16 +2337,17 @@ class SpiderFootDb:
             user_id: user identifier
             role_ids: list of role IDs to assign
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute("DELETE FROM tbl_user_roles WHERE user_id = ?", [user_id])
-                for role_id in role_ids:
-                    self.dbh.execute(
-                        "INSERT INTO tbl_user_roles (user_id, role_id) VALUES (?, ?)",
-                        (user_id, role_id))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error setting user roles: {e}") from e
+        try:
+            self.dbh.execute("DELETE FROM tbl_user_roles WHERE user_id = %s", [user_id])
+            for role_id in role_ids:
+                self.dbh.execute(
+                    "INSERT INTO tbl_user_roles (user_id, role_id) VALUES (%s, %s)",
+                    (user_id, role_id)
+                )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError(f"SQL error setting user roles: {e}") from e
 
     def userPermissionsGet(self, user_id: str) -> list:
         """Get all permissions for a user (resolved through roles).
@@ -2655,30 +2355,30 @@ class SpiderFootDb:
         Returns:
             list: list of (resource, action) tuples
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "SELECT DISTINCT p.resource, p.action FROM tbl_permissions p "
-                    "JOIN tbl_role_permissions rp ON rp.permission_id = p.id "
-                    "JOIN tbl_user_roles ur ON ur.role_id = rp.role_id "
-                    "WHERE ur.user_id = ?", [user_id])
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error fetching user permissions: {e}") from e
+        try:
+            self.dbh.execute(
+                "SELECT DISTINCT p.resource, p.action FROM tbl_permissions p "
+                "JOIN tbl_role_permissions rp ON rp.permission_id = p.id "
+                "JOIN tbl_user_roles ur ON ur.role_id = rp.role_id "
+                "WHERE ur.user_id = %s",
+                [user_id]
+            )
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError(f"SQL error fetching user permissions: {e}") from e
 
     def roleGetByName(self, name: str):
         """Get a role ID by name.
 
         Returns:
-            str: role ID, or None if not found
+            str | None: role ID, or None if not found
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute("SELECT id FROM tbl_roles WHERE name = ?", [name])
-                row = self.dbh.fetchone()
-                return row[0] if row else None
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error fetching role: {e}") from e
+        try:
+            self.dbh.execute("SELECT id FROM tbl_roles WHERE name = %s", [name])
+            row = self.dbh.fetchone()
+            return row[0] if row else None
+        except psycopg2.Error as e:
+            raise IOError(f"SQL error fetching role: {e}") from e
 
     def roleList(self) -> list:
         """Get all roles.
@@ -2686,32 +2386,35 @@ class SpiderFootDb:
         Returns:
             list: list of (id, name, description)
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute("SELECT id, name, description FROM tbl_roles ORDER BY name")
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error listing roles: {e}") from e
+        try:
+            self.dbh.execute("SELECT id, name, description FROM tbl_roles ORDER BY name")
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError(f"SQL error listing roles: {e}") from e
 
-    # ── Audit log ────────────────────────────────────────────────────────
+    # ── Audit log ──────────────────────────────────────────────────────────
 
     def auditLogCreate(self, user_id: str, username: str, action: str,
                        resource: str, resource_id: str = "",
                        details: str = "", ip_address: str = "") -> None:
         """Create an audit log entry."""
-        log_id = hashlib.md5(f"{user_id}{action}{time.time()}{random.SystemRandom().randint(0, 99999999)}".encode(
-            'utf-8', errors='replace')).hexdigest()
+        log_id = hashlib.md5(
+            f"{user_id}{action}{time.time()}{random.SystemRandom().randint(0, 99999999)}".encode(
+                'utf-8', errors='replace')
+        ).hexdigest()
         now = int(time.time() * 1000)
 
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "INSERT INTO tbl_audit_log (id, user_id, username, action, resource, resource_id, details, ip_address, created) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (log_id, user_id, username, action, resource, resource_id, details, ip_address, now))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                log.error(f"Failed to create audit log entry: {e}")
+        try:
+            self.dbh.execute(
+                "INSERT INTO tbl_audit_log "
+                "(id, user_id, username, action, resource, resource_id, details, ip_address, created) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (log_id, user_id, username, action, resource, resource_id, details, ip_address, now)
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            log.error(f"Failed to create audit log entry: {e}")
 
     def auditLogList(self, limit: int = 100, offset: int = 0) -> list:
         """Get audit log entries (newest first).
@@ -2719,41 +2422,40 @@ class SpiderFootDb:
         Returns:
             list: list of (id, user_id, username, action, resource, resource_id, details, ip_address, created)
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "SELECT id, user_id, username, action, resource, resource_id, details, ip_address, created "
-                    "FROM tbl_audit_log ORDER BY created DESC LIMIT ? OFFSET ?",
-                    (limit, offset))
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error listing audit log: {e}") from e
+        try:
+            self.dbh.execute(
+                "SELECT id, user_id, username, action, resource, resource_id, details, ip_address, created "
+                "FROM tbl_audit_log ORDER BY created DESC LIMIT %s OFFSET %s",
+                (limit, offset)
+            )
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError(f"SQL error listing audit log: {e}") from e
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Worker registry methods (Phase 11)
-    # ──────────────────────────────────────────────────────────────────────
+    # ── Worker registry ────────────────────────────────────────────────────
 
     def workerRegister(self, worker_id: str, name: str, host: str, queue_type: str = 'fast') -> None:
         """Register or update a distributed scan worker.
 
         Args:
-            worker_id: Unique worker identifier (UUID)
+            worker_id: Unique worker identifier
             name: Human-readable worker name
             host: Hostname/IP of the worker
             queue_type: 'fast' or 'slow'
         """
         now = int(time.time())
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "INSERT INTO tbl_workers (id, name, host, queue_type, status, current_scan, last_seen, registered) "
-                    "VALUES (?, ?, ?, ?, 'idle', '', ?, ?) "
-                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, host=excluded.host, "
-                    "queue_type=excluded.queue_type, status='idle', last_seen=excluded.last_seen",
-                    (worker_id, name, host, queue_type, now, now))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error registering worker: {e}") from e
+        try:
+            self.dbh.execute(
+                "INSERT INTO tbl_workers (id, name, host, queue_type, status, current_scan, last_seen, registered) "
+                "VALUES (%s, %s, %s, %s, 'idle', '', %s, %s) "
+                "ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, host=EXCLUDED.host, "
+                "queue_type=EXCLUDED.queue_type, status='idle', last_seen=EXCLUDED.last_seen",
+                (worker_id, name, host, queue_type, now, now)
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError(f"SQL error registering worker: {e}") from e
 
     def workerHeartbeat(self, worker_id: str, status: str, current_scan: str = '') -> None:
         """Update worker heartbeat, status, and current scan.
@@ -2761,17 +2463,18 @@ class SpiderFootDb:
         Args:
             worker_id: Unique worker identifier
             status: 'idle', 'busy', or 'offline'
-            current_scan: scan_id currently being processed (empty if idle)
+            current_scan: scan_id currently being processed
         """
         now = int(time.time())
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "UPDATE tbl_workers SET status=?, current_scan=?, last_seen=? WHERE id=?",
-                    (status, current_scan, now, worker_id))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error updating worker heartbeat: {e}") from e
+        try:
+            self.dbh.execute(
+                "UPDATE tbl_workers SET status=%s, current_scan=%s, last_seen=%s WHERE id=%s",
+                (status, current_scan, now, worker_id)
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError(f"SQL error updating worker heartbeat: {e}") from e
 
     def workerList(self) -> list:
         """Return all registered workers.
@@ -2779,30 +2482,30 @@ class SpiderFootDb:
         Returns:
             list: list of (id, name, host, queue_type, status, current_scan, last_seen, registered)
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "SELECT id, name, host, queue_type, status, current_scan, last_seen, registered "
-                    "FROM tbl_workers ORDER BY registered DESC")
-                return self.dbh.fetchall()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error listing workers: {e}") from e
+        try:
+            self.dbh.execute(
+                "SELECT id, name, host, queue_type, status, current_scan, last_seen, registered "
+                "FROM tbl_workers ORDER BY registered DESC"
+            )
+            return self.dbh.fetchall()
+        except psycopg2.Error as e:
+            raise IOError(f"SQL error listing workers: {e}") from e
 
     def workerGet(self, worker_id: str):
         """Get a single worker by ID.
 
         Returns:
-            tuple | None: (id, name, host, queue_type, status, current_scan, last_seen, registered) or None
+            tuple | None: worker row or None
         """
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "SELECT id, name, host, queue_type, status, current_scan, last_seen, registered "
-                    "FROM tbl_workers WHERE id=?",
-                    (worker_id,))
-                return self.dbh.fetchone()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error getting worker: {e}") from e
+        try:
+            self.dbh.execute(
+                "SELECT id, name, host, queue_type, status, current_scan, last_seen, registered "
+                "FROM tbl_workers WHERE id=%s",
+                (worker_id,)
+            )
+            return self.dbh.fetchone()
+        except psycopg2.Error as e:
+            raise IOError(f"SQL error getting worker: {e}") from e
 
     def workerOfflineStale(self, max_age_seconds: int = 60) -> None:
         """Mark workers as offline if they have not sent a heartbeat recently.
@@ -2811,37 +2514,35 @@ class SpiderFootDb:
             max_age_seconds: Workers with last_seen older than this are marked offline
         """
         cutoff = int(time.time()) - max_age_seconds
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "UPDATE tbl_workers SET status='offline' "
-                    "WHERE status != 'offline' AND last_seen < ?",
-                    (cutoff,))
-                self.conn.commit()
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error marking stale workers offline: {e}") from e
+        try:
+            self.dbh.execute(
+                "UPDATE tbl_workers SET status='offline' "
+                "WHERE status != 'offline' AND last_seen < %s",
+                (cutoff,)
+            )
+            self.conn.commit()
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError(f"SQL error marking stale workers offline: {e}") from e
 
     def workerDeleteOffline(self, max_age_seconds: int = 300) -> int:
         """Delete workers that have been offline for longer than the specified time.
 
-        Since workers are stateless and automatically re-register on heartbeat,
-        it's safe to delete their database records. They will reconnect and
-        re-register when they come back online.
-
         Args:
-            max_age_seconds: Delete workers offline for longer than this (default: 300s = 5 minutes)
+            max_age_seconds: Delete workers offline for longer than this (default 300s)
 
         Returns:
             int: Number of workers deleted
         """
         cutoff = int(time.time()) - max_age_seconds
-        with self.dbhLock:
-            try:
-                self.dbh.execute(
-                    "DELETE FROM tbl_workers WHERE status = 'offline' AND last_seen < ?",
-                    (cutoff,))
-                deleted_count = self.dbh.rowcount
-                self.conn.commit()
-                return deleted_count
-            except sqlite3.Error as e:
-                raise IOError(f"SQL error deleting offline workers: {e}") from e
+        try:
+            self.dbh.execute(
+                "DELETE FROM tbl_workers WHERE status = 'offline' AND last_seen < %s",
+                (cutoff,)
+            )
+            deleted_count = self.dbh.rowcount
+            self.conn.commit()
+            return deleted_count
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            raise IOError(f"SQL error deleting offline workers: {e}") from e

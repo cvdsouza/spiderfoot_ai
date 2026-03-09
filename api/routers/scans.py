@@ -66,6 +66,7 @@ async def create_scan(
     user: dict = Depends(require_permission("scans", "create")),
     config: dict = Depends(get_config),
     logging_queue=Depends(get_logging_queue),
+    dbh: SpiderFootDb = Depends(get_db),
 ) -> list:
     """Start a new scan."""
     status, result = await launch_scan(
@@ -76,6 +77,7 @@ async def create_scan(
         module_list=scan.module_list,
         type_list=scan.type_list,
         use_case=scan.use_case,
+        dbh=dbh,
     )
 
     if status == "ERROR":
@@ -162,6 +164,7 @@ async def rerun_scan(
         scan_name=scan_name,
         scan_target=scan_target,
         module_list=','.join(modlist),
+        dbh=dbh,
     )
 
     if status == "ERROR":

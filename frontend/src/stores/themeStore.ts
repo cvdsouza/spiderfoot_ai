@@ -1,22 +1,15 @@
 import { create } from 'zustand';
 
+// Dark-only mode — always apply .dark class
+document.documentElement.classList.add('dark');
+
 interface ThemeState {
   isDark: boolean;
   toggle: () => void;
 }
 
-export const useThemeStore = create<ThemeState>((set) => ({
-  isDark: localStorage.getItem('sf_theme') === 'dark',
-  toggle: () =>
-    set((state) => {
-      const newDark = !state.isDark;
-      localStorage.setItem('sf_theme', newDark ? 'dark' : 'light');
-      document.documentElement.classList.toggle('dark', newDark);
-      return { isDark: newDark };
-    }),
+// Always dark — toggle is a no-op kept for backward compatibility
+export const useThemeStore = create<ThemeState>(() => ({
+  isDark: true,
+  toggle: () => {},
 }));
-
-// Initialize on load
-if (localStorage.getItem('sf_theme') === 'dark') {
-  document.documentElement.classList.add('dark');
-}

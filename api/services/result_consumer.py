@@ -51,9 +51,9 @@ def _run_correlations(dbh, config: dict, scan_id: str) -> None:
         log.debug(f"No correlation rules configured — skipping for scan {scan_id}")
         return
 
-    db_path = config.get('__database', '')
-    if not db_path:
-        log.error("Cannot run correlations: __database not set in config")
+    database_url = os.environ.get('DATABASE_URL', '')
+    if not database_url:
+        log.error("Cannot run correlations: DATABASE_URL not set")
         return
 
     # Inline script executed by the subprocess.  Uses repr() for all
@@ -68,19 +68,21 @@ def _run_correlations(dbh, config: dict, scan_id: str) -> None:
     # logging the skipped rules so the operator knows which ones require
     # more RAM.
     script = textwrap.dedent(f"""\
-        import sys
+        import sys, os
         sys.path.insert(0, {repr(_APP_DIR)})
+        os.environ['DATABASE_URL'] = {repr(database_url)}
+        import psycopg2
         from spiderfoot import SpiderFootDb, SpiderFootCorrelator, SpiderFootHelpers
-        config = {{'__database': {repr(db_path)}}}
-        dbh = SpiderFootDb(config)
+        conn = psycopg2.connect({repr(database_url)})
+        dbh = SpiderFootDb(conn=conn)
         rules_raw = SpiderFootHelpers.loadCorrelationRulesRaw(
             {repr(_CORR_DIR)}, ['template.yaml'])
         if not rules_raw:
             print("No correlation rules found", flush=True)
+            conn.close()
             sys.exit(0)
 
         completed = 0
-        skipped_heavy = 0
         failed = 0
         for rule_id, rule_yaml in rules_raw.items():
             try:
@@ -88,17 +90,15 @@ def _run_correlations(dbh, config: dict, scan_id: str) -> None:
                 parsed = corr.get_ruleset()
                 if not parsed:
                     continue
-                needs_children, needs_sources, needs_entities = corr.analyze_rule_scope(parsed[0])
-                if needs_children or needs_sources or needs_entities:
-                    print(f"SKIP_HEAVY {{rule_id}}", flush=True)
-                    skipped_heavy += 1
-                    continue
                 corr.run_correlations()
+                conn.commit()
                 completed += 1
             except Exception as e:
+                conn.rollback()
                 print(f"RULE_ERROR {{rule_id}}: {{e}}", flush=True)
                 failed += 1
-        print(f"DONE completed={{completed}} skipped_heavy={{skipped_heavy}} failed={{failed}}", flush=True)
+        conn.close()
+        print(f"DONE completed={{completed}} failed={{failed}}", flush=True)
     """)
 
     try:
@@ -106,17 +106,15 @@ def _run_correlations(dbh, config: dict, scan_id: str) -> None:
             [sys.executable, '-c', script],
             capture_output=True,
             text=True,
-            timeout=900,  # 15-minute hard cap
+            timeout=3600,  # 1-hour cap; enrichment-heavy rules on large scans can take time
         )
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
 
         if result.returncode == 0:
-            # Log per-rule skip/error lines at appropriate levels
+            # Log per-rule error lines and completion summary
             for line in stdout.splitlines():
-                if line.startswith("SKIP_HEAVY "):
-                    log.info(f"Correlation rule skipped (needs enrichment, insufficient RAM): {line[11:]}")
-                elif line.startswith("RULE_ERROR "):
+                if line.startswith("RULE_ERROR "):
                     log.warning(f"Correlation rule error: {line[11:]}")
                 elif line.startswith("DONE "):
                     log.info(f"Correlations done for scan {scan_id}: {line[5:]}")
@@ -269,7 +267,11 @@ class ResultConsumerManager:
 
     # How long (seconds) a ConsumerThread may be idle before the watchdog
     # assumes the FINISHED message was dropped and marks the scan complete.
-    STALE_CONSUMER_TIMEOUT = 600  # 10 minutes
+    # Must be long enough to survive quiet phases in slow modules:
+    # sfp_dnsbrute can run for hours with no output, sfp_accounts checks
+    # hundreds of social sites sequentially, sfp_spider crawls entire sites.
+    # 10 minutes was causing false-positive FINISHED on in-progress scans.
+    STALE_CONSUMER_TIMEOUT = 10800  # 3 hours
 
     def _monitor_scans(self):
         """Monitor active scans and spawn/stop consumers as needed.
@@ -363,21 +365,19 @@ class ResultConsumerManager:
         log.info("Scan monitor thread stopped")
 
     def _get_running_scans(self):
-        """Query database for scans in RUNNING state.
+        """Query database for scans in RUNNING or ABORT-REQUESTED state.
 
         Returns:
-            list: List of scan IDs in RUNNING state
+            list: List of scan IDs in RUNNING or ABORT-REQUESTED state
         """
         try:
             # Include ABORT-REQUESTED: the scan is still active and its worker
             # may still publish a lifecycle message (ABORTED/FAILED) that the
             # ConsumerThread must receive to update the final status.
-            with self.dbh.dbhLock:
-                self.dbh.dbh.execute(
-                    "SELECT guid FROM tbl_scan_instance WHERE status IN ('RUNNING', 'ABORT-REQUESTED')"
-                )
-                result = self.dbh.dbh.fetchall()
-                return [row[0] for row in result]
+            # scanInstanceList() columns: guid(0), name(1), seed_target(2),
+            # created(3), started(4), ended(5), status(6), count(7)
+            rows = self.dbh.scanInstanceList()
+            return [r[0] for r in rows if r[6] in ('RUNNING', 'ABORT-REQUESTED')]
         except Exception as e:
             log.error(f"Failed to query running scans: {e}")
             return []
@@ -646,12 +646,12 @@ class ConsumerThread(threading.Thread):
                 # Idempotent insert: skip if this exact hash already exists.
                 # Duplicate hashes arise from at-least-once RabbitMQ delivery
                 # (nack → requeue → redeliver) or scan task redelivery.
-                with self.dbh.dbhLock:
-                    self.dbh.dbh.execute(
-                        "SELECT 1 FROM tbl_scan_results WHERE scan_instance_id=? AND hash=? LIMIT 1",
-                        (scan_id, sfEvent.hash)
-                    )
-                    already_stored = self.dbh.dbh.fetchone() is not None
+                # No lock needed — each ConsumerThread holds its own psycopg2 connection.
+                self.dbh.dbh.execute(
+                    "SELECT 1 FROM tbl_scan_results WHERE scan_instance_id = %s AND hash = %s LIMIT 1",
+                    (scan_id, sfEvent.hash)
+                )
+                already_stored = self.dbh.dbh.fetchone() is not None
 
                 if already_stored:
                     log.debug(f"Skipping duplicate event {event_type} (hash={sfEvent.hash}) for scan {scan_id}")

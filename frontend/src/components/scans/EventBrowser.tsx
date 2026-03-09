@@ -10,7 +10,7 @@ interface EventBrowserProps {
   scanId: string;
   isRunning: boolean;
   initialEventType?: string;
-  eventTypes?: string[]; // pre-populated from ScanInfo summary query
+  eventTypes?: string[];
 }
 
 export default function EventBrowser({
@@ -27,7 +27,6 @@ export default function EventBrowser({
   const [page, setPage] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Sync when parent changes the initial event type (e.g. clicking from Summary tab)
   const [prevInitialEventType, setPrevInitialEventType] = useState(initialEventType);
   if (initialEventType !== prevInitialEventType) {
     setPrevInitialEventType(initialEventType);
@@ -69,138 +68,157 @@ export default function EventBrowser({
 
   return (
     <div>
-      {/* ── Filters row ── */}
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      {/* Filters */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
         {/* Event type */}
-        <div className="flex items-center gap-2">
-          <label className="text-sm font-medium text-[var(--sf-text)]">Type:</label>
-          <select
-            value={eventType}
-            onChange={(e) => { setEventType(e.target.value); setPage(0); }}
-            className="rounded-md border border-[var(--sf-border)] bg-[var(--sf-bg)] px-2 py-1.5 text-sm"
-          >
-            <option value="ALL">All Types</option>
-            {eventTypes.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
-        </div>
+        <select
+          value={eventType}
+          onChange={(e) => { setEventType(e.target.value); setPage(0); }}
+          style={{
+            background: '#060A0F', border: '1px solid #18181B', borderRadius: '2px',
+            padding: '6px 10px', color: '#A1A1AA', fontSize: '11px', cursor: 'pointer',
+          }}
+        >
+          <option value="ALL">ALL TYPES</option>
+          {eventTypes.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
 
         {/* Search */}
-        <div className="flex items-center gap-1">
-          <div className="relative">
-            <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[var(--sf-text-muted)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
-            </svg>
-            <input
-              ref={searchRef}
-              type="text"
-              placeholder="Search data…"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && commitSearch()}
-              className="rounded-md border border-[var(--sf-border)] bg-[var(--sf-bg)] py-1.5 pl-8 pr-2 text-sm text-[var(--sf-text)] placeholder:text-[var(--sf-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--sf-primary)] w-52"
-            />
-          </div>
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          <input
+            ref={searchRef}
+            type="text"
+            placeholder="search data..."
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && commitSearch()}
+            style={{
+              background: '#060A0F', border: '1px solid #18181B', borderRadius: '2px',
+              padding: '6px 10px', color: '#F4F4F5', fontSize: '11px', outline: 'none', width: '200px',
+            }}
+          />
           <button
             onClick={commitSearch}
-            className="rounded-md bg-[var(--sf-primary)] px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--sf-primary-hover)]"
+            style={{
+              background: '#00B4FF', color: '#000', border: 'none',
+              padding: '6px 12px', borderRadius: '2px',
+              fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em', cursor: 'pointer',
+            }}
           >
-            Search
+            SEARCH
           </button>
           {searchQuery && (
             <button
               onClick={() => { setSearchInput(''); setSearchQuery(''); }}
-              className="rounded-md border border-[var(--sf-border)] px-2 py-1.5 text-xs text-[var(--sf-text-muted)] hover:text-[var(--sf-text)]"
+              style={{
+                background: 'none', color: '#52525B', border: '1px solid #27272A',
+                padding: '6px 10px', borderRadius: '2px', fontSize: '10px', cursor: 'pointer',
+              }}
             >
-              Clear
+              CLEAR
             </button>
           )}
         </div>
 
         {/* Hide FP */}
-        <label className="flex items-center gap-1.5 text-sm">
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: '#71717A', letterSpacing: '0.08em', cursor: 'pointer' }}>
           <input
             type="checkbox"
             checked={filterFp}
             onChange={(e) => { setFilterFp(e.target.checked); setPage(0); }}
-            className="rounded"
+            style={{ accentColor: '#00B4FF', cursor: 'pointer' }}
           />
-          Hide False Positives
+          HIDE FP
         </label>
 
-        {/* All / Unique toggle */}
-        <div className="flex gap-1 rounded-md border border-[var(--sf-border)] p-0.5">
+        {/* View mode */}
+        <div style={{ display: 'flex', gap: '2px', background: '#060A0F', padding: '3px', borderRadius: '2px', border: '1px solid #18181B' }}>
           <button
             onClick={() => setViewMode('all')}
-            className={`rounded px-2 py-1 text-xs ${viewMode === 'all' ? 'bg-[var(--sf-primary)] text-white' : ''}`}
+            style={{
+              padding: '4px 10px', background: viewMode === 'all' ? '#00B4FF' : 'transparent',
+              color: viewMode === 'all' ? '#000' : '#52525B', border: 'none', borderRadius: '2px',
+              fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em', cursor: 'pointer',
+            }}
           >
-            All Results
+            ALL
           </button>
           <button
             onClick={() => setViewMode('unique')}
             disabled={eventType === 'ALL'}
-            className={`rounded px-2 py-1 text-xs disabled:opacity-50 ${viewMode === 'unique' ? 'bg-[var(--sf-primary)] text-white' : ''}`}
+            style={{
+              padding: '4px 10px', background: viewMode === 'unique' ? '#00B4FF' : 'transparent',
+              color: viewMode === 'unique' ? '#000' : '#52525B', border: 'none', borderRadius: '2px',
+              fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em',
+              cursor: eventType === 'ALL' ? 'not-allowed' : 'pointer', opacity: eventType === 'ALL' ? 0.4 : 1,
+            }}
           >
-            Unique
+            UNIQUE
           </button>
         </div>
 
-        {/* Result count */}
-        <span className="ml-auto text-xs text-[var(--sf-text-muted)]">
+        <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#52525B', letterSpacing: '0.05em' }}>
           {viewMode === 'all'
-            ? total > 0 ? `${from}–${to} of ${total.toLocaleString()}` : '0 results'
-            : `${uniqueEvents.length} unique`}
+            ? total > 0 ? `${from}–${to} OF ${total.toLocaleString()}` : '0 RESULTS'
+            : `${uniqueEvents.length} UNIQUE`}
         </span>
       </div>
 
-      {/* ── Active search chip ── */}
+      {/* Active search chip */}
       {searchQuery && (
-        <div className="mb-3 flex items-center gap-2 text-xs text-[var(--sf-text-muted)]">
-          <span>Filtered by:</span>
-          <span className="rounded bg-[var(--sf-primary)]/10 px-2 py-0.5 text-[var(--sf-primary)] font-mono">
+        <div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '10px', color: '#52525B' }}>
+          <span style={{ letterSpacing: '0.1em' }}>FILTER:</span>
+          <span style={{ background: '#001828', color: '#00B4FF', border: '1px solid #00B4FF30', borderRadius: '2px', padding: '2px 8px', fontFamily: 'monospace' }}>
             "{searchQuery}"
           </span>
         </div>
       )}
 
-      {/* ── Results table ── */}
+      {/* Results */}
       {(isLoading || isLoadingUnique) ? (
-        <div className="flex items-center justify-center py-8">
-          <div className="h-6 w-6 animate-spin rounded-full border-4 border-[var(--sf-primary)] border-t-transparent" />
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '32px' }}>
+          <div style={{
+            width: '24px', height: '24px', borderRadius: '50%',
+            border: '2px solid #00B4FF30', borderTopColor: '#00B4FF',
+            animation: 'sf-spin 1.2s linear infinite',
+          }} />
         </div>
       ) : viewMode === 'all' ? (
         <>
-          <div className="overflow-x-auto rounded-lg border border-[var(--sf-border)]">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-[var(--sf-border)] bg-[var(--sf-bg-secondary)]">
-                <tr>
-                  <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">Last Seen</th>
-                  <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">Data</th>
-                  <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">Source</th>
-                  <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">Module</th>
-                  <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">Type</th>
-                  <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">FP</th>
+          <div style={{ border: '1px solid #18181B', borderRadius: '2px', overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+              <thead>
+                <tr style={{ background: '#060A0F', borderBottom: '1px solid #18181B' }}>
+                  {['LAST SEEN', 'DATA', 'SOURCE', 'MODULE', 'TYPE', 'FP'].map((h) => (
+                    <th key={h} style={{ padding: '6px 12px', textAlign: 'left', fontSize: '8px', letterSpacing: '0.15em', color: '#3F3F46', fontWeight: 700 }}>
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
                 {events.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-3 py-8 text-center text-[var(--sf-text-muted)]">
-                      {searchQuery ? `No results match "${searchQuery}"` : 'No events found.'}
+                    <td colSpan={6} style={{ padding: '32px', textAlign: 'center', fontSize: '9px', letterSpacing: '0.2em', color: '#3F3F46' }}>
+                      {searchQuery ? `NO RESULTS MATCHING "${searchQuery.toUpperCase()}"` : 'NO EVENTS FOUND'}
                     </td>
                   </tr>
                 ) : (
                   events.map((row: ApiRow, idx: number) => (
-                    <tr key={idx} className="border-b border-[var(--sf-border)] hover:bg-[var(--sf-bg-secondary)]">
-                      <td className="whitespace-nowrap px-3 py-2 text-xs text-[var(--sf-text-muted)]">{row[0]}</td>
-                      <td className="max-w-md truncate px-3 py-2 font-mono text-xs">{row[1]}</td>
-                      <td className="max-w-xs truncate px-3 py-2 text-xs">{row[2]}</td>
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">{row[3]}</td>
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-xs">{row[10]}</td>
-                      <td className="px-3 py-2 text-xs">
+                    <tr key={idx} style={{ borderBottom: '1px solid #0D1117' }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#0D1117')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <td style={{ padding: '6px 12px', whiteSpace: 'nowrap', color: '#52525B', fontSize: '10px' }}>{row[0]}</td>
+                      <td style={{ padding: '6px 12px', fontFamily: 'monospace', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#A1A1AA' }}>{row[1]}</td>
+                      <td style={{ padding: '6px 12px', maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#71717A' }}>{row[2]}</td>
+                      <td style={{ padding: '6px 12px', fontFamily: 'monospace', whiteSpace: 'nowrap', color: '#00B4FF' }}>{row[3]}</td>
+                      <td style={{ padding: '6px 12px', fontFamily: 'monospace', whiteSpace: 'nowrap', color: '#71717A' }}>{row[10]}</td>
+                      <td style={{ padding: '6px 12px' }}>
                         {row[8] === 1 && (
-                          <span className="rounded bg-orange-100 px-1.5 py-0.5 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">FP</span>
+                          <span style={{ background: '#271500', color: '#FF9F0A', border: '1px solid #FF9F0A40', borderRadius: '2px', padding: '1px 5px', fontSize: '9px', fontWeight: 700 }}>FP</span>
                         )}
                       </td>
                     </tr>
@@ -210,50 +228,68 @@ export default function EventBrowser({
             </table>
           </div>
 
-          {/* Pagination controls */}
+          {/* Pagination */}
           {total > PAGE_SIZE && (
-            <div className="mt-3 flex items-center justify-between text-sm">
+            <div style={{ marginTop: '12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <button
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page === 0}
-                className="rounded-md border border-[var(--sf-border)] px-3 py-1.5 text-xs text-[var(--sf-text)] hover:bg-[var(--sf-bg-secondary)] disabled:opacity-40"
+                style={{
+                  background: 'none', color: page === 0 ? '#3F3F46' : '#00B4FF',
+                  border: `1px solid ${page === 0 ? '#27272A' : '#00B4FF40'}`,
+                  padding: '6px 14px', borderRadius: '2px',
+                  fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em',
+                  cursor: page === 0 ? 'not-allowed' : 'pointer',
+                }}
               >
-                ← Prev
+                ← PREV
               </button>
-              <span className="text-xs text-[var(--sf-text-muted)]">
-                Page {page + 1} of {totalPages}
+              <span style={{ fontSize: '10px', color: '#52525B', letterSpacing: '0.1em' }}>
+                PAGE {page + 1} / {totalPages}
               </span>
               <button
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={page >= totalPages - 1}
-                className="rounded-md border border-[var(--sf-border)] px-3 py-1.5 text-xs text-[var(--sf-text)] hover:bg-[var(--sf-bg-secondary)] disabled:opacity-40"
+                style={{
+                  background: 'none', color: page >= totalPages - 1 ? '#3F3F46' : '#00B4FF',
+                  border: `1px solid ${page >= totalPages - 1 ? '#27272A' : '#00B4FF40'}`,
+                  padding: '6px 14px', borderRadius: '2px',
+                  fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em',
+                  cursor: page >= totalPages - 1 ? 'not-allowed' : 'pointer',
+                }}
               >
-                Next →
+                NEXT →
               </button>
             </div>
           )}
         </>
       ) : (
-        <div className="overflow-x-auto rounded-lg border border-[var(--sf-border)]">
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-[var(--sf-border)] bg-[var(--sf-bg-secondary)]">
-              <tr>
-                <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">Value</th>
-                <th className="px-3 py-2 font-medium text-[var(--sf-text-muted)]">Count</th>
+        <div style={{ border: '1px solid #18181B', borderRadius: '2px', overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+            <thead>
+              <tr style={{ background: '#060A0F', borderBottom: '1px solid #18181B' }}>
+                {['VALUE', 'COUNT'].map((h) => (
+                  <th key={h} style={{ padding: '6px 12px', textAlign: 'left', fontSize: '8px', letterSpacing: '0.15em', color: '#3F3F46', fontWeight: 700 }}>
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {uniqueEvents.length === 0 ? (
                 <tr>
-                  <td colSpan={2} className="px-3 py-8 text-center text-[var(--sf-text-muted)]">
-                    {eventType === 'ALL' ? 'Select a specific event type to view unique values.' : 'No unique events found.'}
+                  <td colSpan={2} style={{ padding: '32px', textAlign: 'center', fontSize: '9px', letterSpacing: '0.2em', color: '#3F3F46' }}>
+                    {eventType === 'ALL' ? 'SELECT A SPECIFIC EVENT TYPE TO VIEW UNIQUE VALUES' : 'NO UNIQUE EVENTS FOUND'}
                   </td>
                 </tr>
               ) : (
                 uniqueEvents.map((row: ApiRow, idx: number) => (
-                  <tr key={idx} className="border-b border-[var(--sf-border)] hover:bg-[var(--sf-bg-secondary)]">
-                    <td className="max-w-lg truncate px-3 py-2 font-mono text-xs">{row[0]}</td>
-                    <td className="px-3 py-2 text-xs">{row[1]}</td>
+                  <tr key={idx} style={{ borderBottom: '1px solid #0D1117' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#0D1117')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <td style={{ padding: '6px 12px', fontFamily: 'monospace', color: '#A1A1AA', maxWidth: '500px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row[0]}</td>
+                    <td style={{ padding: '6px 12px', color: '#71717A' }}>{row[1]}</td>
                   </tr>
                 ))
               )}

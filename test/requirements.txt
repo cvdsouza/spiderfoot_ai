@@ -18,3 +18,4 @@ pytest-asyncio>=0.23.0
 pycodestyle==2.9.0
 responses==0.25.0
 httpx>=0.26.0
+testcontainers[postgres]>=3.7.0

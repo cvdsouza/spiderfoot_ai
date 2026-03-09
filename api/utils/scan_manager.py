@@ -49,6 +49,7 @@ async def launch_scan(
     module_list: str = "",
     type_list: str = "",
     use_case: str = "",
+    dbh=None,
 ) -> tuple[str, str]:
     """Launch a new scan in a subprocess.
 
@@ -143,13 +144,19 @@ async def launch_scan(
         # Create scan instance in database BEFORE dispatching to worker
         # This allows the result consumer to start monitoring immediately
         import time
-        dbh = SpiderFootDb(config)
+        _close_dbh = False
+        if dbh is None:
+            dbh = SpiderFootDb(config)
+            _close_dbh = True
         try:
             dbh.scanInstanceCreate(scan_id, scan_name, scan_target)
             dbh.scanInstanceSet(scan_id, started=time.time() * 1000, status='RUNNING')
         except Exception as e:
             log.error(f"Scan [{scan_id}] failed to create database record: {e}")
             return ("ERROR", f"Failed to create scan: {e}")
+        finally:
+            if _close_dbh:
+                dbh.close()
 
         task = {
             "scan_id": scan_id,

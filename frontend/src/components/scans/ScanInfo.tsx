@@ -4,7 +4,6 @@ import { getScanSummary, stopScan } from '../../api/scans';
 import { getScanCorrelations } from '../../api/results';
 import { useScanStatus } from '../../hooks/useScanStatus';
 import StatusBadge from '../common/StatusBadge';
-import RiskBadges from '../common/RiskBadges';
 import EventBrowser from './EventBrowser';
 import ScanLog from './ScanLog';
 import ScanConfig from './ScanConfig';
@@ -18,6 +17,59 @@ import SpideyIcon from '../common/SpideyIcon';
 type ApiRow = Array<string | number | boolean | null>;
 
 type TabType = 'summary' | 'correlations' | 'browse' | 'log' | 'graph' | 'config' | 'ai-insights';
+
+const RISK_COLORS: Record<string, { label: string; bg: string; border: string }> = {
+  CRITICAL: { label: '#FF3B30', bg: '#280A08', border: '#FF3B30' },
+  HIGH:     { label: '#FF9F0A', bg: '#271500', border: '#FF9F0A' },
+  MEDIUM:   { label: '#FFD60A', bg: '#1F1B00', border: '#FFD60A' },
+  LOW:      { label: '#A1A1AA', bg: '#111418', border: '#48484A' },
+  INFO:     { label: '#00B4FF', bg: '#001828', border: '#00B4FF' },
+};
+
+function RiskPills({ riskMatrix, onRiskClick }: { riskMatrix: RiskMatrix; onRiskClick?: (r: string) => void }) {
+  const levels = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'] as const;
+  return (
+    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+      {levels.map((level) => {
+        const count = (riskMatrix as unknown as Record<string, number>)[level] || 0;
+        if (!count) return null;
+        const c = RISK_COLORS[level];
+        return (
+          <button
+            key={level}
+            onClick={() => onRiskClick?.(level)}
+            style={{
+              background: c.bg, color: c.label,
+              border: `1px solid ${c.border}40`,
+              borderRadius: '2px', padding: '2px 7px',
+              fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em',
+              cursor: onRiskClick ? 'pointer' : 'default',
+            }}
+          >
+            {count} {level}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const TAB_LABELS: Record<TabType, string> = {
+  summary: 'SUMMARY',
+  correlations: 'CORRELATIONS',
+  browse: 'BROWSE',
+  graph: 'GRAPH',
+  'ai-insights': 'SPIDEY',
+  log: 'LOG',
+  config: 'CONFIG',
+};
+
+const CORRELATION_FILTER_COLORS: Record<string, { label: string; bg: string; border: string }> = {
+  HIGH:   { label: '#FF3B30', bg: '#280A08', border: '#FF3B30' },
+  MEDIUM: { label: '#FF9F0A', bg: '#271500', border: '#FF9F0A' },
+  LOW:    { label: '#FFD60A', bg: '#1F1B00', border: '#FFD60A' },
+  INFO:   { label: '#00B4FF', bg: '#001828', border: '#00B4FF' },
+};
 
 export default function ScanInfo() {
   const { id } = useParams<{ id: string }>();
@@ -67,8 +119,12 @@ export default function ScanInfo() {
 
   if (!id || !statusData) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--sf-primary)] border-t-transparent" />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '48px 0' }}>
+        <div style={{
+          width: '32px', height: '32px', borderRadius: '50%',
+          border: '2px solid #00B4FF40', borderTopColor: '#00B4FF',
+          animation: 'sf-spin 1.2s linear infinite',
+        }} />
       </div>
     );
   }
@@ -81,59 +137,89 @@ export default function ScanInfo() {
   const isActive = ['RUNNING', 'STARTING', 'STARTED', 'INITIALIZING'].includes(status);
   const isStopping = status === 'ABORT-REQUESTED';
 
-  const tabs: { key: TabType; label: string }[] = [
-    { key: 'summary', label: 'Summary' },
-    { key: 'correlations', label: 'Correlations' },
-    { key: 'browse', label: 'Browse' },
-    { key: 'graph', label: 'Graph' },
-    { key: 'ai-insights', label: 'Spidey' },
-    { key: 'log', label: 'Log' },
-    { key: 'config', label: 'Config' },
+  const tabs: { key: TabType }[] = [
+    { key: 'summary' },
+    { key: 'correlations' },
+    { key: 'browse' },
+    { key: 'graph' },
+    { key: 'ai-insights' },
+    { key: 'log' },
+    { key: 'config' },
   ];
 
   return (
     <div>
       {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-center gap-3">
-          <Link to="/scans" className="text-[var(--sf-text-muted)] hover:text-[var(--sf-text)]">
-            &larr; Scans
-          </Link>
-        </div>
-        <div className="mt-2 flex items-center gap-4">
-          <h1 className="text-2xl font-bold">{scanName}</h1>
-          <StatusBadge status={status} />
+      <div style={{ marginBottom: '24px' }}>
+        <Link
+          to="/scans"
+          style={{ fontSize: '10px', letterSpacing: '0.15em', color: '#52525B', textDecoration: 'none' }}
+        >
+          ← SCAN QUEUE
+        </Link>
+
+        <div style={{ marginTop: '12px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: '9px', letterSpacing: '0.2em', color: '#52525B', marginBottom: '4px' }}>
+              ACTIVE OPERATION
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <h1 style={{ fontSize: '20px', fontWeight: 700, color: '#F4F4F5', letterSpacing: '0.05em' }}>
+                {scanName}
+              </h1>
+              <StatusBadge status={status} />
+            </div>
+            <div style={{ marginTop: '6px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '11px', color: '#71717A', fontFamily: 'monospace' }}>{scanTarget}</span>
+              {riskMatrix && <RiskPills riskMatrix={riskMatrix} onRiskClick={handleRiskClick} />}
+            </div>
+          </div>
+
           {(isActive || isStopping) && (
             <button
               onClick={() => stopMutation.mutate()}
               disabled={stopMutation.isPending || isStopping}
-              className="rounded-md bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50"
+              style={{
+                background: '#271500', color: '#FF9F0A',
+                border: '1px solid #FF9F0A50',
+                padding: '8px 16px', borderRadius: '2px',
+                fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em',
+                cursor: stopMutation.isPending || isStopping ? 'not-allowed' : 'pointer',
+                opacity: stopMutation.isPending || isStopping ? 0.5 : 1,
+              }}
             >
-              {isStopping ? 'Stopping...' : 'Stop Scan'}
+              {isStopping ? '⬛ TERMINATING...' : '■ ABORT SCAN'}
             </button>
           )}
-        </div>
-        <div className="mt-1 flex items-center gap-4 text-sm text-[var(--sf-text-muted)]">
-          <span className="font-mono">{scanTarget}</span>
-          {riskMatrix && <RiskBadges riskMatrix={riskMatrix} onRiskClick={handleRiskClick} />}
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="mb-4 border-b border-[var(--sf-border)]">
-        <div className="flex gap-1">
+      <div style={{ borderBottom: '1px solid #18181B', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', gap: '0' }}>
           {tabs.map((tab) => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`border-b-2 px-4 py-2 text-sm font-medium ${
-                activeTab === tab.key
-                  ? 'border-[var(--sf-primary)] text-[var(--sf-primary)]'
-                  : 'border-transparent text-[var(--sf-text-muted)] hover:text-[var(--sf-text)]'
-              }`}
+              style={{
+                padding: '8px 16px',
+                background: 'none',
+                border: 'none',
+                borderBottom: activeTab === tab.key ? '2px solid #00B4FF' : '2px solid transparent',
+                color: activeTab === tab.key ? '#00B4FF' : '#52525B',
+                fontSize: '10px',
+                fontWeight: 700,
+                letterSpacing: '0.12em',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                transition: 'color 0.15s',
+                marginBottom: '-1px',
+              }}
             >
-              {tab.key === 'ai-insights' && <SpideyIcon size={14} className="mr-1 inline-block" />}
-              {tab.label}
+              {tab.key === 'ai-insights' && <SpideyIcon size={12} />}
+              {TAB_LABELS[tab.key]}
             </button>
           ))}
         </div>
@@ -144,13 +230,22 @@ export default function ScanInfo() {
         {activeTab === 'summary' && (
           <div>
             {summaryData.length === 0 ? (
-              <p className="text-[var(--sf-text-muted)]">No data yet...</p>
+              <div style={{ textAlign: 'center', padding: '48px 0' }}>
+                <div style={{ fontSize: '9px', letterSpacing: '0.2em', color: '#3F3F46' }}>
+                  NO DATA COLLECTED YET
+                </div>
+              </div>
             ) : (
               <>
-                {/* Bar chart overview */}
-                <div className="mb-4 rounded-lg border border-[var(--sf-border)] p-4">
-                  <h3 className="mb-3 text-sm font-medium text-[var(--sf-text-muted)]">Data Distribution</h3>
-                  <div className="space-y-1.5">
+                {/* Bar chart */}
+                <div style={{
+                  marginBottom: '16px', padding: '16px',
+                  background: '#0A0E14', border: '1px solid #18181B', borderRadius: '2px',
+                }}>
+                  <div style={{ fontSize: '9px', letterSpacing: '0.15em', color: '#52525B', marginBottom: '12px' }}>
+                    DATA DISTRIBUTION
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                     {(() => {
                       const sorted = [...summaryData as ApiRow[]].sort((a, b) => Number(b[3]) - Number(a[3]));
                       const top = sorted.slice(0, 15);
@@ -158,17 +253,24 @@ export default function ScanInfo() {
                       return top.map((row: ApiRow, idx: number) => (
                         <div
                           key={idx}
-                          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-[var(--sf-bg-secondary)]"
                           onClick={() => handleEventTypeClick(String(row[0]))}
+                          style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', padding: '3px 6px', borderRadius: '2px' }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = '#0D1117')}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                         >
-                          <span className="w-44 shrink-0 truncate text-xs font-mono text-[var(--sf-primary)]">{row[0]}</span>
-                          <div className="h-5 flex-1 overflow-hidden rounded bg-[var(--sf-bg-secondary)]">
-                            <div
-                              className="h-full rounded bg-[var(--sf-primary)] opacity-70"
-                              style={{ width: `${maxTotal > 0 ? (Number(row[3]) / maxTotal) * 100 : 0}%` }}
-                            />
+                          <span style={{ width: '180px', flexShrink: 0, fontSize: '10px', color: '#00B4FF', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {row[0]}
+                          </span>
+                          <div style={{ flex: 1, height: '6px', background: '#060A0F', borderRadius: '1px', overflow: 'hidden' }}>
+                            <div style={{
+                              height: '100%', background: '#00B4FF',
+                              width: `${maxTotal > 0 ? (Number(row[3]) / maxTotal) * 100 : 0}%`,
+                              opacity: 0.7,
+                            }} />
                           </div>
-                          <span className="w-14 shrink-0 text-right text-xs text-[var(--sf-text-muted)]">{row[3]}</span>
+                          <span style={{ width: '50px', flexShrink: 0, textAlign: 'right', fontSize: '10px', color: '#71717A' }}>
+                            {row[3]}
+                          </span>
                         </div>
                       ));
                     })()}
@@ -176,15 +278,15 @@ export default function ScanInfo() {
                 </div>
 
                 {/* Summary table */}
-                <div className="overflow-x-auto rounded-lg border border-[var(--sf-border)]">
-                  <table className="w-full text-left text-sm">
-                    <thead className="border-b border-[var(--sf-border)] bg-[var(--sf-bg-secondary)]">
-                      <tr>
-                        <th className="px-3 py-3 font-medium text-[var(--sf-text-muted)]">Event Type</th>
-                        <th className="px-3 py-3 font-medium text-[var(--sf-text-muted)]">Description</th>
-                        <th className="px-3 py-3 font-medium text-[var(--sf-text-muted)]">Last Seen</th>
-                        <th className="px-3 py-3 font-medium text-[var(--sf-text-muted)]">Total</th>
-                        <th className="px-3 py-3 font-medium text-[var(--sf-text-muted)]">Unique</th>
+                <div style={{ border: '1px solid #18181B', borderRadius: '2px', overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                    <thead>
+                      <tr style={{ background: '#060A0F', borderBottom: '1px solid #18181B' }}>
+                        {['EVENT TYPE', 'DESCRIPTION', 'LAST SEEN', 'TOTAL', 'UNIQUE'].map((h) => (
+                          <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: '8px', letterSpacing: '0.15em', color: '#3F3F46', fontWeight: 700 }}>
+                            {h}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
@@ -192,13 +294,15 @@ export default function ScanInfo() {
                         <tr
                           key={idx}
                           onClick={() => handleEventTypeClick(String(row[0]))}
-                          className="cursor-pointer border-b border-[var(--sf-border)] hover:bg-[var(--sf-bg-secondary)]"
+                          style={{ borderBottom: '1px solid #0D1117', cursor: 'pointer' }}
+                          onMouseEnter={(e) => (e.currentTarget.style.background = '#0D1117')}
+                          onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                         >
-                          <td className="px-3 py-2 font-mono text-xs text-[var(--sf-primary)]">{row[0]}</td>
-                          <td className="px-3 py-2">{row[1]}</td>
-                          <td className="px-3 py-2 text-xs text-[var(--sf-text-muted)]">{row[2]}</td>
-                          <td className="px-3 py-2">{row[3]}</td>
-                          <td className="px-3 py-2">{row[4]}</td>
+                          <td style={{ padding: '8px 12px', color: '#00B4FF', fontFamily: 'monospace', fontSize: '10px' }}>{row[0]}</td>
+                          <td style={{ padding: '8px 12px', color: '#A1A1AA', fontSize: '11px' }}>{row[1]}</td>
+                          <td style={{ padding: '8px 12px', color: '#52525B', fontSize: '10px' }}>{row[2]}</td>
+                          <td style={{ padding: '8px 12px', color: '#F4F4F5', fontSize: '11px' }}>{row[3]}</td>
+                          <td style={{ padding: '8px 12px', color: '#71717A', fontSize: '11px' }}>{row[4]}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -211,31 +315,25 @@ export default function ScanInfo() {
 
         {activeTab === 'correlations' && (
           <div>
-            {/* Risk level filter pills */}
-            <div className="mb-4 flex flex-wrap items-center gap-2">
-              {['HIGH', 'MEDIUM', 'LOW', 'INFO'].map((level) => {
+            {/* Risk filter */}
+            <div style={{ marginBottom: '16px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px' }}>
+              {(['HIGH', 'MEDIUM', 'LOW', 'INFO'] as const).map((level) => {
                 const count = (correlations as ApiRow[]).filter((r: ApiRow) => r[3] === level).length;
                 if (count === 0) return null;
-                const isActive = riskFilter === level;
-                const colorMap: Record<string, string> = {
-                  HIGH: isActive
-                    ? 'bg-red-600 text-white dark:bg-red-700'
-                    : 'bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-300 dark:hover:bg-red-900/60',
-                  MEDIUM: isActive
-                    ? 'bg-orange-600 text-white dark:bg-orange-700'
-                    : 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/40 dark:text-orange-300 dark:hover:bg-orange-900/60',
-                  LOW: isActive
-                    ? 'bg-yellow-600 text-white dark:bg-yellow-700'
-                    : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/40 dark:text-yellow-300 dark:hover:bg-yellow-900/60',
-                  INFO: isActive
-                    ? 'bg-blue-600 text-white dark:bg-blue-700'
-                    : 'bg-blue-100 text-blue-700 hover:bg-blue-200 dark:bg-blue-900/40 dark:text-blue-300 dark:hover:bg-blue-900/60',
-                };
+                const isActiveFilter = riskFilter === level;
+                const c = CORRELATION_FILTER_COLORS[level];
                 return (
                   <button
                     key={level}
-                    onClick={() => setRiskFilter(isActive ? null : level)}
-                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${colorMap[level]}`}
+                    onClick={() => setRiskFilter(isActiveFilter ? null : level)}
+                    style={{
+                      background: isActiveFilter ? c.label : c.bg,
+                      color: isActiveFilter ? '#000' : c.label,
+                      border: `1px solid ${c.border}50`,
+                      padding: '4px 12px', borderRadius: '2px',
+                      fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em',
+                      cursor: 'pointer',
+                    }}
                   >
                     {count} {level}
                   </button>
@@ -244,17 +342,19 @@ export default function ScanInfo() {
               {riskFilter && (
                 <button
                   onClick={() => setRiskFilter(null)}
-                  className="text-xs text-[var(--sf-text-muted)] hover:text-[var(--sf-text)]"
+                  style={{ background: 'none', border: 'none', color: '#52525B', fontSize: '10px', letterSpacing: '0.1em', cursor: 'pointer' }}
                 >
-                  Clear filter
+                  CLEAR FILTER
                 </button>
               )}
             </div>
 
             {correlations.length === 0 ? (
-              <p className="text-[var(--sf-text-muted)]">No correlations found.</p>
+              <div style={{ textAlign: 'center', padding: '48px 0', fontSize: '9px', letterSpacing: '0.2em', color: '#3F3F46' }}>
+                NO CORRELATIONS FOUND
+              </div>
             ) : (
-              <div className="space-y-3">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {(correlations as ApiRow[])
                   .filter((row: ApiRow) => !riskFilter || row[3] === riskFilter)
                   .map((row: ApiRow, idx: number) => (

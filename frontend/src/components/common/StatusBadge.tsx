@@ -1,12 +1,14 @@
-const STATUS_COLORS: Record<string, string> = {
-  RUNNING: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
-  STARTING: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
-  STARTED: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
-  INITIALIZING: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
-  FINISHED: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
-  ABORTED: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
-  'ABORT-REQUESTED': 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300',
-  'ERROR-FAILED': 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
+// Nexus-style terminal status badges
+
+const STATUS_CONFIG: Record<string, { color: string; bg: string; border: string; label?: string }> = {
+  RUNNING:          { color: '#00B4FF', bg: '#001828', border: '#00B4FF40', label: 'RUNNING' },
+  STARTING:         { color: '#00B4FF', bg: '#001828', border: '#00B4FF40', label: 'STARTING' },
+  STARTED:          { color: '#00B4FF', bg: '#001828', border: '#00B4FF40', label: 'STARTING' },
+  INITIALIZING:     { color: '#00B4FF', bg: '#001828', border: '#00B4FF40', label: 'INIT' },
+  FINISHED:         { color: '#32D74B', bg: '#001A08', border: '#32D74B40', label: 'FINISHED' },
+  ABORTED:          { color: '#FF9F0A', bg: '#271500', border: '#FF9F0A40', label: 'ABORTED' },
+  'ABORT-REQUESTED':{ color: '#FF9F0A', bg: '#271500', border: '#FF9F0A40', label: 'STOPPING' },
+  'ERROR-FAILED':   { color: '#FF3B30', bg: '#280A08', border: '#FF3B3040', label: 'ERROR' },
 };
 
 interface StatusBadgeProps {
@@ -14,20 +16,40 @@ interface StatusBadgeProps {
 }
 
 export default function StatusBadge({ status }: StatusBadgeProps) {
-  const colorClasses = STATUS_COLORS[status] || 'bg-gray-100 text-gray-800';
-
-  const labels: Record<string, string> = {
-    'ABORT-REQUESTED': 'Stopping...',
-    ABORTED: 'User Stopped',
-  };
-  const label = labels[status] ?? status;
+  const cfg = STATUS_CONFIG[status] ?? { color: '#52525B', bg: '#111418', border: '#3F3F4640' };
+  const label = cfg.label ?? status;
+  const isLive = ['RUNNING', 'STARTING', 'STARTED', 'INITIALIZING'].includes(status);
 
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${colorClasses}`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        padding: '2px 7px',
+        fontSize: '8px',
+        fontWeight: 700,
+        letterSpacing: '0.1em',
+        borderRadius: '2px',
+        border: `1px solid ${cfg.border}`,
+        background: cfg.bg,
+        color: cfg.color,
+        whiteSpace: 'nowrap',
+        fontFamily: 'inherit',
+      }}
     >
-      {status === 'RUNNING' && (
-        <span className="mr-1.5 inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+      {isLive && (
+        <span
+          style={{
+            width: '5px',
+            height: '5px',
+            borderRadius: '50%',
+            background: cfg.color,
+            boxShadow: `0 0 5px ${cfg.color}`,
+            animation: 'sf-blink 0.8s infinite',
+            flexShrink: 0,
+          }}
+        />
       )}
       {label}
     </span>
