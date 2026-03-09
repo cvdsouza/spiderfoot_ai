@@ -117,28 +117,41 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Load full user from database
-    from api.dependencies import get_db
-    dbh = get_db(request)
+    # Load full user from database — draw a connection directly from the pool
+    # (auth is a middleware dependency, not a router handler, so FastAPI's
+    # generator-based Depends() lifecycle doesn't apply here)
+    from spiderfoot import SpiderFootDb
+    pool = request.app.state.db_pool
+    conn = pool.getconn()
+    try:
+        dbh = SpiderFootDb(conn=conn)
+        user_row = dbh.userGet(payload["user_id"])
+        if not user_row:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
-    user_row = dbh.userGet(payload["user_id"])
-    if not user_row:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        # row: (id, username, password, display_name, email, is_active, created, updated)
+        if not user_row[5]:  # is_active
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Account is disabled",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
-    # row: (id, username, password, display_name, email, is_active, created, updated)
-    if not user_row[5]:  # is_active
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Account is disabled",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    roles = dbh.userRolesGet(user_row[0])
-    permissions = dbh.userPermissionsGet(user_row[0])
+        roles = dbh.userRolesGet(user_row[0])
+        permissions = dbh.userPermissionsGet(user_row[0])
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
 
     return {
         "id": user_row[0],

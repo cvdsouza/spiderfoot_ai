@@ -1,5 +1,7 @@
 """FastAPI dependency injection providers."""
 
+from typing import Generator
+
 from fastapi import Request
 
 from sflib import SpiderFoot
@@ -16,16 +18,24 @@ def get_default_config(request: Request) -> dict:
     return request.app.state.default_config
 
 
-def get_db(request: Request) -> SpiderFootDb:
-    """Create a SpiderFootDb instance per request.
+def get_db(request: Request) -> Generator[SpiderFootDb, None, None]:
+    """Draw one PostgreSQL connection from the pool and yield a SpiderFootDb.
 
-    This creates the SQLite connection inside the current thread,
-    which is critical because SQLite objects cannot cross threads.
-    FastAPI runs sync endpoints in a worker thread pool, so the
-    connection must be opened here — not in an async dependency.
+    Commits on success, rolls back on exception, returns the connection to the
+    pool when the request is complete.  FastAPI handles generator-style
+    dependencies automatically when used with Depends().
     """
-    config = request.app.state.config
-    return SpiderFootDb(config)
+    pool = request.app.state.db_pool
+    conn = pool.getconn()
+    try:
+        dbh = SpiderFootDb(conn=conn)
+        yield dbh
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
 
 
 def get_sf(request: Request) -> SpiderFoot:

@@ -1,186 +1,91 @@
 import { useState } from 'react';
-import { NavLink, Link, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { useSidebarStore } from '../../stores/sidebarStore';
-import { useThemeStore } from '../../stores/themeStore';
 import { logout as apiLogout } from '../../api/auth';
 
-// ── SVG Icons ──────────────────────────────────────────────────────────────────
+// ── ICONS ─────────────────────────────────────────────────────────────────────
+// Minimal geometric SVG icons in the Nexus style
 
-function IconHome() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 shrink-0">
-      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-      <polyline points="9 22 9 12 15 12 15 22" />
-    </svg>
-  );
-}
+function IcHome()    { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16,flexShrink:0}}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>; }
+function IcScans()   { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16,flexShrink:0}}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>; }
+function IcNewScan() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16,flexShrink:0}}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="M11 8v6M8 11h6"/></svg>; }
+function IcRules()   { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16,flexShrink:0}}><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>; }
+function IcSettings(){ return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16,flexShrink:0}}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>; }
+function IcUsers()   { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16,flexShrink:0}}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>; }
+function IcWorkers() { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{width:16,height:16,flexShrink:0}}><rect x="2" y="2" width="20" height="8" rx="1"/><rect x="2" y="14" width="20" height="8" rx="1"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>; }
+function IcLogout()  { return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{width:14,height:14,flexShrink:0}}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>; }
+function IcPin({ pinned }: { pinned: boolean }) { return <svg viewBox="0 0 24 24" fill={pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{width:14,height:14,flexShrink:0}}><path d="M12 17v5"/><path d="M9 10.76V16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-5.24a8 8 0 1 1 8 0z"/></svg>; }
 
-function IconScans() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 shrink-0">
-      <circle cx="11" cy="11" r="8" />
-      <path d="m21 21-4.35-4.35" />
-    </svg>
-  );
-}
-
-function IconNewScan() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 shrink-0">
-      <circle cx="11" cy="11" r="8" />
-      <path d="m21 21-4.35-4.35" />
-      <path d="M11 8v6M8 11h6" />
-    </svg>
-  );
-}
-
-function IconRules() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 shrink-0">
-      <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />
-    </svg>
-  );
-}
-
-function IconSettings() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 shrink-0">
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  );
-}
-
-function IconUsers() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 shrink-0">
-      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-      <circle cx="9" cy="7" r="4" />
-      <path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-    </svg>
-  );
-}
-
-function IconWorkers() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 shrink-0">
-      <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
-      <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
-      <line x1="6" y1="6" x2="6.01" y2="6" />
-      <line x1="6" y1="18" x2="6.01" y2="18" />
-    </svg>
-  );
-}
-
-function IconPin({ pinned }: { pinned: boolean }) {
-  return (
-    <svg viewBox="0 0 24 24" fill={pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 shrink-0">
-      <path d="M12 17v5" />
-      <path d="M9 10.76V16a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-5.24a8 8 0 1 1 8 0z" />
-    </svg>
-  );
-}
-
-function IconSun() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 shrink-0">
-      <circle cx="12" cy="12" r="5" />
-      <line x1="12" y1="1" x2="12" y2="3" />
-      <line x1="12" y1="21" x2="12" y2="23" />
-      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-      <line x1="1" y1="12" x2="3" y2="12" />
-      <line x1="21" y1="12" x2="23" y2="12" />
-      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-    </svg>
-  );
-}
-
-function IconMoon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 shrink-0">
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-    </svg>
-  );
-}
-
-function IconLogout() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4 shrink-0">
-      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-      <polyline points="16 17 21 12 16 7" />
-      <line x1="21" y1="12" x2="9" y2="12" />
-    </svg>
-  );
-}
-
-// ── Nav item ───────────────────────────────────────────────────────────────────
-
-interface NavItemProps {
-  to: string;
-  icon: React.ReactNode;
-  label: string;
-  expanded: boolean;
-}
-
-function NavItem({ to, icon, label, expanded }: NavItemProps) {
+// ── NAV ITEM ──────────────────────────────────────────────────────────────────
+function NavItem({ to, icon, label, expanded }: { to: string; icon: React.ReactNode; label: string; expanded: boolean }) {
   return (
     <NavLink
       to={to}
       end={to === '/'}
       title={!expanded ? label : undefined}
-      className={({ isActive }) =>
-        `flex items-center gap-3 px-3 py-2.5 rounded-lg mx-2 transition-all duration-150 group relative ${
-          isActive
-            ? 'bg-[var(--sf-sidebar-active-bg)] text-[var(--sf-sidebar-text-active)] border-l-2 border-[var(--sf-sidebar-accent)] pl-[10px]'
-            : 'text-[var(--sf-sidebar-text)] hover:bg-[var(--sf-sidebar-hover)] hover:text-[var(--sf-sidebar-text-active)] border-l-2 border-transparent pl-[10px]'
-        }`
-      }
+      style={({ isActive }) => ({
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        padding: '8px 12px 8px 14px',
+        margin: '1px 6px',
+        borderRadius: '2px',
+        borderLeft: `2px solid ${isActive ? 'var(--sf-primary)' : 'transparent'}`,
+        background: isActive ? 'var(--sf-sidebar-active-bg)' : 'transparent',
+        color: isActive ? 'var(--sf-sidebar-text-active)' : 'var(--sf-sidebar-text)',
+        textDecoration: 'none',
+        transition: 'all 0.12s ease',
+        cursor: 'pointer',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+      })}
+      onMouseEnter={e => { if (!(e.currentTarget as HTMLElement).style.borderLeft.includes('primary')) { (e.currentTarget as HTMLElement).style.background = 'var(--sf-sidebar-hover)'; (e.currentTarget as HTMLElement).style.color = 'var(--sf-sidebar-text-active)'; } }}
+      onMouseLeave={e => { const el = e.currentTarget as HTMLElement; if (!el.classList.contains('active')) { el.style.background = 'transparent'; el.style.color = 'var(--sf-sidebar-text)'; } }}
     >
       {icon}
-      <span
-        className="text-sm font-medium whitespace-nowrap overflow-hidden transition-all duration-200"
-        style={{ width: expanded ? 'auto' : 0, opacity: expanded ? 1 : 0 }}
-      >
-        {label}
+      <span style={{
+        fontSize: '9px',
+        fontWeight: 700,
+        letterSpacing: '0.12em',
+        overflow: 'hidden',
+        maxWidth: expanded ? '120px' : '0px',
+        opacity: expanded ? 1 : 0,
+        transition: 'max-width 0.2s ease, opacity 0.15s ease',
+      }}>
+        {label.toUpperCase()}
       </span>
     </NavLink>
   );
 }
 
-// ── Group label ────────────────────────────────────────────────────────────────
-
 function GroupLabel({ label, expanded }: { label: string; expanded: boolean }) {
   return (
-    <div
-      className="px-5 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-widest transition-all duration-200 overflow-hidden whitespace-nowrap"
-      style={{
-        color: 'var(--sf-sidebar-group)',
-        opacity: expanded ? 1 : 0,
-        height: expanded ? 'auto' : 0,
-        paddingTop: expanded ? undefined : 0,
-        paddingBottom: expanded ? undefined : 0,
-      }}
-    >
-      {label}
+    <div style={{
+      padding: expanded ? '12px 18px 4px' : '8px 0 4px',
+      fontSize: '7px',
+      fontWeight: 700,
+      letterSpacing: '0.2em',
+      color: 'var(--sf-sidebar-group)',
+      overflow: 'hidden',
+      maxHeight: expanded ? '32px' : '0px',
+      opacity: expanded ? 1 : 0,
+      transition: 'max-height 0.2s ease, opacity 0.15s ease, padding 0.2s ease',
+      whiteSpace: 'nowrap',
+    }}>
+      {label.toUpperCase()}
     </div>
   );
 }
 
-// ── Divider ────────────────────────────────────────────────────────────────────
-
 function Divider() {
-  return <div className="mx-3 my-2 border-t border-white/8" />;
+  return <div style={{ margin: '6px 8px', borderTop: '1px solid var(--sf-border)', opacity: 0.5 }} />;
 }
 
-// ── Sidebar ────────────────────────────────────────────────────────────────────
-
+// ── SIDEBAR ───────────────────────────────────────────────────────────────────
 export default function Sidebar() {
   const [isHovered, setIsHovered] = useState(false);
   const { isPinned, togglePin } = useSidebarStore();
-  const { isDark, toggle: toggleTheme } = useThemeStore();
   const { user, hasPermission, hasRole, logout } = useAuthStore();
   const navigate = useNavigate();
 
@@ -193,136 +98,153 @@ export default function Sidebar() {
   }
 
   const initials = (user?.display_name || user?.username || 'U')
-    .split(' ')
-    .map((w) => w[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2);
+    .split(' ').map((w) => w[0]).join('').toUpperCase().slice(0, 2);
 
   return (
     <aside
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       style={{
-        width: isExpanded ? 220 : 56,
-        minWidth: isExpanded ? 220 : 56,
-        backgroundColor: 'var(--sf-sidebar-bg)',
-        transition: 'width 200ms ease, min-width 200ms ease',
+        width: isExpanded ? 220 : 52,
+        minWidth: isExpanded ? 220 : 52,
+        background: 'var(--sf-sidebar-bg)',
+        borderRight: '1px solid var(--sf-border)',
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        overflow: 'hidden',
+        flexShrink: 0,
+        zIndex: 40,
+        transition: 'width 0.18s ease, min-width 0.18s ease',
       }}
-      className="flex flex-col h-screen overflow-hidden z-40 shrink-0"
     >
       {/* Logo */}
-      <Link to="/" className="flex items-center gap-3 px-3 py-4 h-14 shrink-0 hover:opacity-90 transition-opacity">
-        <div className="w-8 h-8 rounded-lg bg-[var(--sf-sidebar-accent)] flex items-center justify-center shrink-0 text-white font-bold text-sm">
-          SF
+      <div style={{
+        height: '44px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        padding: '0 14px',
+        borderBottom: '1px solid var(--sf-border)',
+        flexShrink: 0,
+        overflow: 'hidden',
+      }}>
+        {/* Hexagon logo mark */}
+        <div style={{
+          width: '24px', height: '24px',
+          background: 'var(--sf-primary-dim)',
+          border: '1px solid var(--sf-primary)50',
+          borderRadius: '3px',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0,
+          fontSize: '11px',
+          color: 'var(--sf-primary)',
+          fontWeight: 700,
+        }}>
+          ⬡
         </div>
-        <span
-          className="text-white font-semibold text-sm whitespace-nowrap overflow-hidden transition-all duration-200"
-          style={{ opacity: isExpanded ? 1 : 0, width: isExpanded ? 'auto' : 0 }}
-        >
-          SpiderFoot AI
-        </span>
-      </Link>
+        <div style={{
+          overflow: 'hidden',
+          maxWidth: isExpanded ? '140px' : '0px',
+          opacity: isExpanded ? 1 : 0,
+          transition: 'max-width 0.18s ease, opacity 0.15s ease',
+          whiteSpace: 'nowrap',
+        }}>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--sf-text)', letterSpacing: '0.2em' }}>SPIDERFOOT</div>
+          <div style={{ fontSize: '7px', color: 'var(--sf-text-faint)', letterSpacing: '0.25em', marginTop: '-1px' }}>AI OSINT PLATFORM</div>
+        </div>
+      </div>
 
-      <Divider />
+      {/* Navigation */}
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: '6px' }}>
+        <NavItem to="/" icon={<IcHome />} label="Dashboard" expanded={isExpanded} />
 
-      {/* Home */}
-      <NavItem to="/" icon={<IconHome />} label="Dashboard" expanded={isExpanded} />
+        <Divider />
+        <GroupLabel label="Intelligence" expanded={isExpanded} />
+        <NavItem to="/scans" icon={<IcScans />} label="Scans" expanded={isExpanded} />
+        {hasPermission('scans', 'create') && (
+          <NavItem to="/newscan" icon={<IcNewScan />} label="New Scan" expanded={isExpanded} />
+        )}
 
-      <Divider />
+        <Divider />
+        <GroupLabel label="Analysis" expanded={isExpanded} />
+        <NavItem to="/correlation-rules" icon={<IcRules />} label="Rules" expanded={isExpanded} />
 
-      {/* Intelligence group */}
-      <GroupLabel label="Intelligence" expanded={isExpanded} />
-      <NavItem to="/scans" icon={<IconScans />} label="Scans" expanded={isExpanded} />
-      {hasPermission('scans', 'create') && (
-        <NavItem to="/newscan" icon={<IconNewScan />} label="New Scan" expanded={isExpanded} />
-      )}
-
-      <Divider />
-
-      {/* Analysis group */}
-      <GroupLabel label="Analysis" expanded={isExpanded} />
-      <NavItem to="/correlation-rules" icon={<IconRules />} label="Rules" expanded={isExpanded} />
-
-      {/* Platform group — settings/admin items */}
-      {(hasPermission('settings', 'read') || hasRole('administrator')) && (
-        <>
-          <Divider />
-          <GroupLabel label="Platform" expanded={isExpanded} />
-          {hasPermission('settings', 'read') && (
-            <NavItem to="/settings" icon={<IconSettings />} label="Settings" expanded={isExpanded} />
-          )}
-          {hasRole('administrator') && (
-            <>
-              <NavItem to="/users" icon={<IconUsers />} label="Users" expanded={isExpanded} />
-              <NavItem to="/workers" icon={<IconWorkers />} label="Workers" expanded={isExpanded} />
-            </>
-          )}
-        </>
-      )}
-
-      {/* Spacer */}
-      <div className="flex-1" />
-
-      <Divider />
+        {(hasPermission('settings', 'read') || hasRole('administrator')) && (
+          <>
+            <Divider />
+            <GroupLabel label="Platform" expanded={isExpanded} />
+            {hasPermission('settings', 'read') && (
+              <NavItem to="/settings" icon={<IcSettings />} label="Settings" expanded={isExpanded} />
+            )}
+            {hasRole('administrator') && (
+              <>
+                <NavItem to="/users" icon={<IcUsers />} label="Users" expanded={isExpanded} />
+                <NavItem to="/workers" icon={<IcWorkers />} label="Workers" expanded={isExpanded} />
+              </>
+            )}
+          </>
+        )}
+      </div>
 
       {/* Bottom controls */}
-      <div className="flex flex-col gap-1 px-2 pb-3">
+      <div style={{ borderTop: '1px solid var(--sf-border)', padding: '6px 0 8px', flexShrink: 0 }}>
         {/* Pin toggle */}
         <button
           onClick={togglePin}
           title={isPinned ? 'Unpin sidebar' : 'Pin sidebar open'}
-          className="flex items-center gap-3 px-3 py-2 rounded-lg text-[var(--sf-sidebar-text)] hover:bg-[var(--sf-sidebar-hover)] hover:text-[var(--sf-sidebar-text-active)] transition-colors"
+          style={{
+            display: 'flex', alignItems: 'center', gap: '10px',
+            width: '100%', padding: '7px 14px',
+            background: 'transparent', border: 'none', cursor: 'pointer',
+            color: isPinned ? 'var(--sf-primary)' : 'var(--sf-text-faint)',
+            transition: 'color 0.15s',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.color = 'var(--sf-text-dim)')}
+          onMouseLeave={e => (e.currentTarget.style.color = isPinned ? 'var(--sf-primary)' : 'var(--sf-text-faint)')}
         >
-          <IconPin pinned={isPinned} />
-          <span
-            className="text-xs whitespace-nowrap overflow-hidden transition-all duration-200"
-            style={{ opacity: isExpanded ? 1 : 0, width: isExpanded ? 'auto' : 0 }}
-          >
-            {isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-          </span>
-        </button>
-
-        {/* Theme toggle */}
-        <button
-          onClick={toggleTheme}
-          title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-          className="flex items-center gap-3 px-3 py-2 rounded-lg text-[var(--sf-sidebar-text)] hover:bg-[var(--sf-sidebar-hover)] hover:text-[var(--sf-sidebar-text-active)] transition-colors"
-        >
-          {isDark ? <IconSun /> : <IconMoon />}
-          <span
-            className="text-xs whitespace-nowrap overflow-hidden transition-all duration-200"
-            style={{ opacity: isExpanded ? 1 : 0, width: isExpanded ? 'auto' : 0 }}
-          >
-            {isDark ? 'Light mode' : 'Dark mode'}
+          <IcPin pinned={isPinned} />
+          <span style={{ fontSize: '8px', letterSpacing: '0.1em', maxWidth: isExpanded ? '120px' : '0', opacity: isExpanded ? 1 : 0, overflow: 'hidden', whiteSpace: 'nowrap', transition: 'max-width 0.18s ease, opacity 0.15s ease' }}>
+            {isPinned ? 'UNPIN SIDEBAR' : 'PIN SIDEBAR'}
           </span>
         </button>
 
         <Divider />
 
-        {/* User section */}
-        <div className="flex items-center gap-3 px-3 py-2">
-          <div className="w-7 h-7 rounded-full bg-[var(--sf-sidebar-accent)] flex items-center justify-center text-white text-xs font-bold shrink-0">
+        {/* User + logout */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 12px' }}>
+          <div style={{
+            width: '22px', height: '22px', flexShrink: 0,
+            borderRadius: '2px',
+            background: 'var(--sf-primary-dim)',
+            border: '1px solid var(--sf-primary)30',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '8px', fontWeight: 700, color: 'var(--sf-primary)',
+          }}>
             {initials}
           </div>
-          <div
-            className="flex-1 min-w-0 overflow-hidden transition-all duration-200"
-            style={{ opacity: isExpanded ? 1 : 0, width: isExpanded ? 'auto' : 0 }}
-          >
-            <div className="text-xs font-medium text-[var(--sf-sidebar-text-active)] truncate">
-              {user?.display_name || user?.username}
+          <div style={{
+            flex: 1, minWidth: 0, overflow: 'hidden',
+            maxWidth: isExpanded ? '120px' : '0',
+            opacity: isExpanded ? 1 : 0,
+            transition: 'max-width 0.18s ease, opacity 0.15s ease',
+          }}>
+            <div style={{ fontSize: '9px', color: 'var(--sf-text-dim)', fontWeight: 700, letterSpacing: '0.08em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {(user?.display_name || user?.username || '').toUpperCase()}
             </div>
-            <div className="text-[10px] text-[var(--sf-sidebar-text)] capitalize truncate">
-              {user?.roles?.[0] ?? ''}
+            <div style={{ fontSize: '7px', color: 'var(--sf-text-faint)', letterSpacing: '0.1em' }}>
+              {(user?.roles?.[0] ?? '').toUpperCase()}
             </div>
           </div>
           {isExpanded && (
             <button
               onClick={handleLogout}
               title="Sign out"
-              className="text-[var(--sf-sidebar-text)] hover:text-red-400 transition-colors shrink-0"
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--sf-text-faint)', flexShrink: 0, padding: '2px' }}
+              onMouseEnter={e => (e.currentTarget.style.color = 'var(--sf-error)')}
+              onMouseLeave={e => (e.currentTarget.style.color = 'var(--sf-text-faint)')}
             >
-              <IconLogout />
+              <IcLogout />
             </button>
           )}
         </div>

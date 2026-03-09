@@ -2,30 +2,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listWorkers, cleanupOfflineWorkers } from '../../api/workers';
 import type { WorkerRecord } from '../../api/workers';
 
-function statusBadge(status: WorkerRecord['status']) {
-  const styles: Record<WorkerRecord['status'], string> = {
-    idle:    'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300',
-    busy:    'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300',
-    offline: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300',
-  };
-  return (
-    <span className={`text-xs font-medium px-2 py-0.5 rounded ${styles[status]}`}>
-      {status}
-    </span>
-  );
-}
-
-function queueBadge(queueType: string) {
-  const style = queueType === 'slow'
-    ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300'
-    : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300';
-  return (
-    <span className={`text-xs font-medium px-2 py-0.5 rounded ${style}`}>
-      {queueType}
-    </span>
-  );
-}
-
 function relativeTime(ts: number): string {
   if (!ts) return '—';
   const diff = Math.floor(Date.now() / 1000) - ts;
@@ -34,98 +10,126 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 3600)}h ago`;
 }
 
+const STATUS_STYLES: Record<WorkerRecord['status'], { label: string; bg: string; border: string; dot: string }> = {
+  idle:    { label: '#32D74B', bg: '#001A08', border: '#32D74B', dot: '#32D74B' },
+  busy:    { label: '#00B4FF', bg: '#001828', border: '#00B4FF', dot: '#00B4FF' },
+  offline: { label: '#FF3B30', bg: '#280A08', border: '#FF3B30', dot: '#FF3B30' },
+};
+
+const QUEUE_STYLES: Record<string, { label: string; bg: string; border: string }> = {
+  fast: { label: '#00B4FF', bg: '#001828', border: '#00B4FF' },
+  slow: { label: '#FF9F0A', bg: '#271500', border: '#FF9F0A' },
+};
+
 export default function WorkersStatus() {
   const queryClient = useQueryClient();
 
   const { data: workers = [], isLoading, error } = useQuery<WorkerRecord[]>({
     queryKey: ['workers'],
     queryFn: listWorkers,
-    refetchInterval: 15_000,  // refresh every 15 s to match heartbeat cadence
+    refetchInterval: 15_000,
   });
 
   const cleanupMutation = useMutation({
     mutationFn: cleanupOfflineWorkers,
-    onSuccess: (data) => {
-      // Refetch workers list after cleanup
-      queryClient.invalidateQueries({ queryKey: ['workers'] });
-      if (data.deleted > 0) {
-        console.log(`Cleaned up ${data.deleted} offline worker(s)`);
-      }
-    },
-    onError: (error) => {
-      console.error('Failed to cleanup offline workers:', error);
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['workers'] }),
   });
-
-  const handleRefresh = () => {
-    // Trigger cleanup and refresh
-    cleanupMutation.mutate();
-  };
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-[var(--sf-text)]">Workers</h1>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-[var(--sf-text-secondary)]">
-            Auto-refreshes every 15 s
-          </span>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+        <div>
+          <div style={{ fontSize: '9px', letterSpacing: '0.2em', color: '#52525B', marginBottom: '4px' }}>
+            DISTRIBUTED INFRASTRUCTURE
+          </div>
+          <h1 style={{ fontSize: '20px', fontWeight: 700, color: '#F4F4F5', letterSpacing: '0.05em' }}>
+            WORKER NODES
+          </h1>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <span style={{ fontSize: '10px', color: '#52525B', letterSpacing: '0.08em' }}>AUTO-REFRESH: 15S</span>
           <button
-            onClick={handleRefresh}
+            onClick={() => cleanupMutation.mutate()}
             disabled={cleanupMutation.isPending}
-            className="px-4 py-2 bg-[var(--sf-primary)] text-white rounded hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium transition-opacity"
+            style={{
+              background: cleanupMutation.isPending ? '#060A0F' : '#001828',
+              color: cleanupMutation.isPending ? '#3F3F46' : '#00B4FF',
+              border: `1px solid ${cleanupMutation.isPending ? '#27272A' : '#00B4FF40'}`,
+              padding: '8px 14px', borderRadius: '2px',
+              fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em',
+              cursor: cleanupMutation.isPending ? 'not-allowed' : 'pointer',
+            }}
           >
-            {cleanupMutation.isPending ? 'Refreshing...' : 'Refresh & Cleanup'}
+            {cleanupMutation.isPending ? 'REFRESHING...' : '↺ REFRESH & CLEANUP'}
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="mb-4 bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded px-3 py-2">
-          Failed to load workers
+        <div style={{ marginBottom: '16px', padding: '12px 16px', background: '#280A08', borderLeft: '3px solid #FF3B30', fontSize: '11px', color: '#FF3B30' }}>
+          ⚠ FAILED TO LOAD WORKERS
         </div>
       )}
 
       {isLoading ? (
-        <div className="text-[var(--sf-text-secondary)]">Loading workers…</div>
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
+          <div style={{ width: '32px', height: '32px', borderRadius: '50%', border: '2px solid #00B4FF30', borderTopColor: '#00B4FF', animation: 'sf-spin 1.2s linear infinite' }} />
+        </div>
       ) : workers.length === 0 ? (
-        <div className="bg-[var(--sf-card)] border border-[var(--sf-border)] rounded-lg p-8 text-center">
-          <p className="text-[var(--sf-text-secondary)] mb-2">No workers registered</p>
-          <p className="text-xs text-[var(--sf-text-secondary)]">
-            Start a worker with:{' '}
-            <code className="font-mono bg-[var(--sf-bg-secondary)] px-1 py-0.5 rounded">
-              docker compose -f docker-compose.yml -f docker-compose-worker.yml up
-            </code>
-          </p>
+        <div style={{ border: '1px solid #18181B', borderRadius: '2px', padding: '48px', textAlign: 'center' }}>
+          <div style={{ fontSize: '9px', letterSpacing: '0.2em', color: '#3F3F46', marginBottom: '12px' }}>
+            NO WORKER NODES REGISTERED
+          </div>
+          <p style={{ fontSize: '10px', color: '#52525B', marginBottom: '8px' }}>Start a distributed worker with:</p>
+          <code style={{ fontSize: '10px', color: '#00B4FF', fontFamily: 'monospace', background: '#001828', padding: '4px 8px', borderRadius: '2px' }}>
+            docker compose -f docker-compose.yml -f docker-compose-worker.yml up
+          </code>
         </div>
       ) : (
-        <div className="bg-[var(--sf-card)] border border-[var(--sf-border)] rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
+        <div style={{ border: '1px solid #18181B', borderRadius: '2px', overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
             <thead>
-              <tr className="border-b border-[var(--sf-border)]">
-                <th className="text-left px-4 py-3 text-[var(--sf-text-secondary)] font-medium">Name</th>
-                <th className="text-left px-4 py-3 text-[var(--sf-text-secondary)] font-medium">Host</th>
-                <th className="text-left px-4 py-3 text-[var(--sf-text-secondary)] font-medium">Queue</th>
-                <th className="text-left px-4 py-3 text-[var(--sf-text-secondary)] font-medium">Status</th>
-                <th className="text-left px-4 py-3 text-[var(--sf-text-secondary)] font-medium">Current Scan</th>
-                <th className="text-left px-4 py-3 text-[var(--sf-text-secondary)] font-medium">Last Seen</th>
+              <tr style={{ background: '#060A0F', borderBottom: '1px solid #18181B' }}>
+                {['NODE', 'HOST', 'QUEUE', 'STATUS', 'CURRENT SCAN', 'LAST HEARTBEAT'].map((h) => (
+                  <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: '8px', letterSpacing: '0.15em', color: '#3F3F46', fontWeight: 700 }}>
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {workers.map((w) => (
-                <tr key={w.id} className="border-b border-[var(--sf-border)] last:border-0">
-                  <td className="px-4 py-3 text-[var(--sf-text)] font-medium">{w.name}</td>
-                  <td className="px-4 py-3 text-[var(--sf-text-secondary)] font-mono text-xs">{w.host}</td>
-                  <td className="px-4 py-3">{queueBadge(w.queue_type)}</td>
-                  <td className="px-4 py-3">{statusBadge(w.status)}</td>
-                  <td className="px-4 py-3 text-[var(--sf-text-secondary)] font-mono text-xs">
-                    {w.current_scan || '—'}
-                  </td>
-                  <td className="px-4 py-3 text-[var(--sf-text-secondary)] text-xs">
-                    {relativeTime(w.last_seen)}
-                  </td>
-                </tr>
-              ))}
+              {workers.map((w) => {
+                const ss = STATUS_STYLES[w.status];
+                const qs = QUEUE_STYLES[w.queue_type] || QUEUE_STYLES.fast;
+                return (
+                  <tr key={w.id} style={{ borderBottom: '1px solid #0D1117' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#0D1117')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <td style={{ padding: '10px 12px', color: '#F4F4F5', fontWeight: 600 }}>{w.name}</td>
+                    <td style={{ padding: '10px 12px', fontFamily: 'monospace', color: '#71717A', fontSize: '10px' }}>{w.host}</td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <span style={{ background: qs.bg, color: qs.label, border: `1px solid ${qs.border}40`, borderRadius: '2px', padding: '2px 7px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em' }}>
+                        {w.queue_type.toUpperCase()}
+                      </span>
+                    </td>
+                    <td style={{ padding: '10px 12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: ss.dot, display: 'inline-block', animation: w.status !== 'offline' ? 'sf-blink 2s infinite' : 'none' }} />
+                        <span style={{ background: ss.bg, color: ss.label, border: `1px solid ${ss.border}40`, borderRadius: '2px', padding: '2px 7px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em' }}>
+                          {w.status.toUpperCase()}
+                        </span>
+                      </div>
+                    </td>
+                    <td style={{ padding: '10px 12px', fontFamily: 'monospace', color: '#52525B', fontSize: '10px' }}>
+                      {w.current_scan || '—'}
+                    </td>
+                    <td style={{ padding: '10px 12px', color: '#52525B', fontSize: '10px' }}>
+                      {relativeTime(w.last_seen)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

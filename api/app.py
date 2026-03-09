@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from copy import deepcopy
 from pathlib import Path
 
+import psycopg2.pool
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -86,15 +87,23 @@ def _load_all_correlation_rules(correlations_dir: str, dbh: SpiderFootDb) -> lis
 def reload_correlation_rules(app: FastAPI) -> list:
     """Reload all correlation rules (called after CRUD operations).
 
-    Creates a fresh DB connection, reloads file + DB rules, and updates app state.
+    Draws a connection from the pool, reloads file + DB rules, and updates app state.
 
     Returns:
         list: the reloaded correlation rules
     """
     config = app.state.config
     correlations_dir = app.state.correlations_dir
-    dbh = SpiderFootDb(config)
-    rules = _load_all_correlation_rules(correlations_dir, dbh)
+    conn = app.state.db_pool.getconn()
+    try:
+        dbh = SpiderFootDb(conn=conn)
+        rules = _load_all_correlation_rules(correlations_dir, dbh)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        app.state.db_pool.putconn(conn)
     config['__correlationrules__'] = rules
     app.state.correlation_rules = rules
     log.info(f"Correlation rules reloaded: {len(rules)} rules active.")
@@ -123,16 +132,42 @@ async def lifespan(app: FastAPI):
         log.critical(f"No modules found in modules directory: {mod_dir}")
         raise RuntimeError("No modules found")
 
-    # Initialize database
+    # Initialize connection pool
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL environment variable is required")
     try:
-        dbh = SpiderFootDb(config)
+        db_pool = psycopg2.pool.ThreadedConnectionPool(minconn=5, maxconn=20, dsn=database_url)
+        app.state.db_pool = db_pool
     except Exception as e:
-        log.critical(f"Failed to initialize database: {e}", exc_info=True)
+        log.critical(f"Failed to create database connection pool: {e}", exc_info=True)
         raise
+
+    # Initialize database schema (using a pool connection)
+    conn = db_pool.getconn()
+    try:
+        dbh = SpiderFootDb(conn=conn, init=True)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        db_pool.closeall()
+        log.critical(f"Failed to initialize database schema: {e}", exc_info=True)
+        raise
+    finally:
+        db_pool.putconn(conn)
 
     # Load and merge correlation rules (file-based + user-defined from DB)
     correlations_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + '/correlations/'
-    sf_correlation_rules = _load_all_correlation_rules(correlations_dir, dbh)
+    conn = db_pool.getconn()
+    try:
+        dbh_rules = SpiderFootDb(conn=conn)
+        sf_correlation_rules = _load_all_correlation_rules(correlations_dir, dbh_rules)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        db_pool.putconn(conn)
 
     # Store in config (matching sf.py pattern)
     config['__modules__'] = sf_modules
@@ -147,24 +182,41 @@ async def lifespan(app: FastAPI):
     # Load saved configuration
     default_config = deepcopy(config)
     sf = SpiderFoot(default_config)
-    dbh_init = SpiderFootDb(default_config, init=True)
-    live_config = sf.configUnserialize(dbh_init.configGet(), default_config)
+    conn = db_pool.getconn()
+    try:
+        dbh_cfg = SpiderFootDb(conn=conn)
+        live_config = sf.configUnserialize(dbh_cfg.configGet(), default_config)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        db_pool.putconn(conn)
 
     # Bootstrap admin user from environment variables
     admin_user = os.environ.get("SPIDERFOOT_ADMIN_USER", "")
     admin_pass = os.environ.get("SPIDERFOOT_ADMIN_PASSWORD", "")
     if admin_user and admin_pass:
-        existing = dbh.userGetByUsername(admin_user)
-        if not existing:
-            from api.middleware.auth import pwd_context
-            password_hash = pwd_context.hash(admin_pass)
-            user_id = dbh.userCreate(admin_user, password_hash, display_name="Administrator")
-            admin_role_id = dbh.roleGetByName("administrator")
-            if admin_role_id:
-                dbh.userRolesSet(user_id, [admin_role_id])
-            log.info(f"Created admin user '{admin_user}' from environment variables")
-        else:
-            log.debug(f"Admin user '{admin_user}' already exists, skipping bootstrap")
+        conn = db_pool.getconn()
+        try:
+            dbh_admin = SpiderFootDb(conn=conn)
+            existing = dbh_admin.userGetByUsername(admin_user)
+            if not existing:
+                from api.middleware.auth import pwd_context
+                password_hash = pwd_context.hash(admin_pass)
+                user_id = dbh_admin.userCreate(admin_user, password_hash, display_name="Administrator")
+                admin_role_id = dbh_admin.roleGetByName("administrator")
+                if admin_role_id:
+                    dbh_admin.userRolesSet(user_id, [admin_role_id])
+                log.info(f"Created admin user '{admin_user}' from environment variables")
+            else:
+                log.debug(f"Admin user '{admin_user}' already exists, skipping bootstrap")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            db_pool.putconn(conn)
 
     # Set up app state
     app.state.config = live_config
@@ -178,12 +230,17 @@ async def lifespan(app: FastAPI):
     rabbitmq_url = os.environ.get('RABBITMQ_URL', '')
     if rabbitmq_url and rabbitmq_available():
         try:
-            consumer_manager = ResultConsumerManager(dbh, rabbitmq_url, config=live_config)
+            conn = db_pool.getconn()
+            dbh_consumer = SpiderFootDb(conn=conn)
+            consumer_manager = ResultConsumerManager(dbh_consumer, rabbitmq_url, config=live_config)
             consumer_manager.start()
             app.state.result_consumer = consumer_manager
+            app.state.result_consumer_conn = conn  # keep connection alive for consumer lifetime
             log.info("Result consumer started for stateless workers")
         except Exception as e:
             log.error(f"Failed to start result consumer: {e}")
+            if 'conn' in locals():
+                db_pool.putconn(conn)
     else:
         log.debug("RabbitMQ not available — result consumer not started (workers will use direct DB access)")
 
@@ -194,6 +251,9 @@ async def lifespan(app: FastAPI):
     # Cleanup on shutdown
     if hasattr(app.state, 'result_consumer'):
         app.state.result_consumer.shutdown()
+    if hasattr(app.state, 'result_consumer_conn'):
+        db_pool.putconn(app.state.result_consumer_conn)
+    db_pool.closeall()
     log.info("SpiderFoot API shutting down.")
 
 

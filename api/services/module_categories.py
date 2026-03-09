@@ -18,8 +18,6 @@ SLOW_MODULES: set[str] = {
     'sfp_sslcert',
     # Web crawl / spider
     'sfp_spider',
-    'sfp_crawler',
-    'sfp_webanalyzer',
     # Heavily rate-limited / paid API modules
     'sfp_shodan',
     'sfp_virustotal',
@@ -28,8 +26,7 @@ SLOW_MODULES: set[str] = {
     'sfp_ipstack',
     'sfp_hackertarget',
     # Brute-force modules
-    'sfp_bruteforce',
-    'sfp_dns_brute',
+    'sfp_dnsbrute',
 }
 
 

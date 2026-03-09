@@ -1,80 +1,186 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
 
-/* Use .dark class (on <html>) for dark mode, not the OS media query */
+/* Use .dark class (on <html>) for dark mode — always applied */
 @custom-variant dark (&:is(.dark *));
 
+/* ── DESIGN TOKENS ───────────────────────────────────────────────────────────── */
 :root {
-  /* Brand */
-  --sf-primary: #4e7df4;
-  --sf-primary-hover: #3b6be0;
-  --sf-danger: #ef4444;
-  --sf-success: #22c55e;
-  --sf-warning: #f59e0b;
-  --sf-info: #06b6d4;
+  /* Typography */
+  --sf-font: 'Share Tech Mono', 'Courier New', 'Lucida Console', monospace;
 
-  /* Backgrounds */
-  --sf-bg: #f0f4f9;
-  --sf-bg-secondary: #ffffff;
-  --sf-bg-card: #ffffff;
-
-  /* Text */
-  --sf-text: #0d1121;
-  --sf-text-muted: #5a6a8a;
+  /* Core surfaces — always dark (terminal mode) */
+  --sf-bg:          #030508;
+  --sf-bg-surface:  #060A0F;
+  --sf-bg-card:     #0A0E14;
+  --sf-bg-elevated: #0D1117;
 
   /* Borders */
-  --sf-border: #d1d9f0;
+  --sf-border:      #18181B;
+  --sf-border-dim:  #27272A;
 
-  /* Sidebar — always dark regardless of theme */
-  --sf-sidebar-bg: #1a1f36;
-  --sf-sidebar-text: #8a9bc5;
-  --sf-sidebar-text-active: #ffffff;
-  --sf-sidebar-accent: #4e7df4;
-  --sf-sidebar-group: #4a5a7a;
-  --sf-sidebar-hover: rgba(78, 125, 244, 0.12);
-  --sf-sidebar-active-bg: rgba(78, 125, 244, 0.18);
+  /* Text */
+  --sf-text:        #F4F4F5;
+  --sf-text-muted:  #71717A;
+  --sf-text-dim:    #52525B;
+  --sf-text-faint:  #3F3F46;
 
-  /* Backward-compat aliases used in existing components */
-  --sf-card: var(--sf-bg-card);
-  --sf-accent: var(--sf-primary);
-  --sf-text-secondary: var(--sf-text-muted);
-}
+  /* Primary accent — cyan blue */
+  --sf-primary:       #00B4FF;
+  --sf-primary-dim:   #001828;
+  --sf-primary-hover: #33C3FF;
 
-.dark {
-  --sf-bg: #0d1121;
-  --sf-bg-secondary: #1a1f36;
-  --sf-bg-card: #1f2545;
-  --sf-text: #e8eaf6;
-  --sf-text-muted: #8a9bc5;
-  --sf-border: #2d3a6b;
+  /* Severity / Risk */
+  --sf-critical:    #FF3B30;
+  --sf-critical-bg: #280A08;
+  --sf-high:        #FF9F0A;
+  --sf-high-bg:     #271500;
+  --sf-medium:      #FFD60A;
+  --sf-medium-bg:   #1F1B00;
+  --sf-low:         #48484A;
+  --sf-low-bg:      #111418;
+  --sf-info:        #00B4FF;
+  --sf-info-bg:     #001828;
+  --sf-success:     #32D74B;
+  --sf-success-bg:  #001A08;
 
-  /* Sidebar stays the same in dark mode */
-  --sf-primary-hover: #6b95f7;
+  /* Scan status */
+  --sf-running:  #00B4FF;
+  --sf-finished: #32D74B;
+  --sf-aborted:  #FF9F0A;
+  --sf-error:    #FF3B30;
+
+  /* Sidebar */
+  --sf-sidebar-bg:          #060A0F;
+  --sf-sidebar-text:        #52525B;
+  --sf-sidebar-text-active: #F4F4F5;
+  --sf-sidebar-accent:      #00B4FF;
+  --sf-sidebar-group:       #3F3F46;
+  --sf-sidebar-hover:       rgba(0, 180, 255, 0.06);
+  --sf-sidebar-active-bg:   rgba(0, 180, 255, 0.08);
 
   /* Backward-compat aliases */
-  --sf-card: var(--sf-bg-card);
-  --sf-accent: var(--sf-primary);
+  --sf-card:           var(--sf-bg-card);
+  --sf-accent:         var(--sf-primary);
   --sf-text-secondary: var(--sf-text-muted);
+  --sf-danger:         var(--sf-critical);
+  --sf-warning:        var(--sf-high);
+  --sf-bg-secondary:   var(--sf-bg-surface);
+}
+
+/* Dark variant — same values (always dark) */
+.dark {
+  --sf-primary-hover: #33C3FF;
+}
+
+/* ── BASE ────────────────────────────────────────────────────────────────────── */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
 }
 
 body {
-  margin: 0;
   background-color: var(--sf-bg);
   color: var(--sf-text);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: var(--sf-font);
 }
 
-/* Logo animations */
-@keyframes pulse-subtle {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.95;
-    transform: scale(1.02);
-  }
+/* Slim scrollbars */
+::-webkit-scrollbar         { width: 3px; height: 3px; }
+::-webkit-scrollbar-track   { background: var(--sf-bg); }
+::-webkit-scrollbar-thumb   { background: var(--sf-border-dim); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--sf-text-faint); }
+
+/* ── ANIMATIONS ──────────────────────────────────────────────────────────────── */
+@keyframes sf-blink  { 0%,100%{opacity:1}       50%{opacity:0.15} }
+@keyframes sf-spin   { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+@keyframes sf-glow   { 0%,100%{opacity:0.45}    50%{opacity:1} }
+@keyframes sf-slide  { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+@keyframes sf-scan   { 0%{transform:translateX(-100%)} 100%{transform:translateX(200vw)} }
+@keyframes sf-float  { 0%,100%{transform:translateY(0px)} 50%{transform:translateY(-14px)} }
+@keyframes sf-pulse-subtle { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.9;transform:scale(1.02)} }
+@keyframes sf-fadeIn { from{opacity:0} to{opacity:1} }
+
+.animate-sf-blink        { animation: sf-blink 0.8s infinite; }
+.animate-sf-spin         { animation: sf-spin 1.2s linear infinite; }
+.animate-sf-glow         { animation: sf-glow 2s ease-in-out infinite; }
+.animate-sf-slide        { animation: sf-slide 0.25s ease; }
+.animate-sf-float        { animation: sf-float 8s ease-in-out infinite; }
+.animate-pulse-subtle    { animation: sf-pulse-subtle 3s ease-in-out infinite; }
+.animate-sf-fadeIn       { animation: sf-fadeIn 0.3s ease; }
+
+/* ── TEXTURE HELPERS ─────────────────────────────────────────────────────────── */
+
+/* Scanline overlay — apply to header/topbar elements */
+.sf-scanline::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(255, 255, 255, 0.007) 2px,
+    rgba(255, 255, 255, 0.007) 4px
+  );
+  pointer-events: none;
 }
 
-.animate-pulse-subtle {
-  animation: pulse-subtle 3s ease-in-out infinite;
+/* Subtle grid background */
+.sf-grid {
+  background-image:
+    linear-gradient(rgba(0, 180, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 180, 255, 0.035) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+/* Scanning line — add as absolute child */
+.sf-scan-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, #00B4FF30 40%, #00B4FF50 50%, #00B4FF30 60%, transparent 100%);
+  animation: sf-scan 5s linear infinite;
+  pointer-events: none;
+}
+
+/* ── SEVERITY BADGE BASE ─────────────────────────────────────────────────────── */
+.sf-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.sf-badge-critical { background: var(--sf-critical-bg); color: var(--sf-critical); border: 1px solid color-mix(in srgb, var(--sf-critical) 40%, transparent); }
+.sf-badge-high     { background: var(--sf-high-bg);     color: var(--sf-high);     border: 1px solid color-mix(in srgb, var(--sf-high) 40%, transparent); }
+.sf-badge-medium   { background: var(--sf-medium-bg);   color: var(--sf-medium);   border: 1px solid color-mix(in srgb, var(--sf-medium) 40%, transparent); }
+.sf-badge-low      { background: var(--sf-low-bg);      color: var(--sf-low);      border: 1px solid color-mix(in srgb, var(--sf-low) 50%, transparent); }
+.sf-badge-info     { background: var(--sf-info-bg);     color: var(--sf-info);     border: 1px solid color-mix(in srgb, var(--sf-info) 35%, transparent); }
+.sf-badge-success  { background: var(--sf-success-bg);  color: var(--sf-success);  border: 1px solid color-mix(in srgb, var(--sf-success) 35%, transparent); }
+
+/* ── STATUS COLORS ───────────────────────────────────────────────────────────── */
+.sf-status-running  { color: var(--sf-running);  }
+.sf-status-finished { color: var(--sf-finished); }
+.sf-status-aborted  { color: var(--sf-aborted);  }
+.sf-status-error    { color: var(--sf-error);    }
+
+/* ── TERMINAL INPUT / BUTTON OVERRIDES ───────────────────────────────────────── */
+input, textarea, select, button {
+  font-family: var(--sf-font);
+}
+
+/* Focus ring in accent color */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 1px solid var(--sf-primary);
+  outline-offset: 0;
 }

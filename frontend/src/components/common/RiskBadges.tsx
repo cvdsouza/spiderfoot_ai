@@ -1,5 +1,12 @@
 import type { RiskMatrix } from '../../types';
 
+const RISK_CFG = {
+  HIGH:   { color: '#FF3B30', bg: '#280A08', border: '#FF3B3040' },
+  MEDIUM: { color: '#FF9F0A', bg: '#271500', border: '#FF9F0A40' },
+  LOW:    { color: '#FFD60A', bg: '#1F1B00', border: '#FFD60A40' },
+  INFO:   { color: '#00B4FF', bg: '#001828', border: '#00B4FF40' },
+};
+
 interface RiskBadgesProps {
   riskMatrix: RiskMatrix;
   onRiskClick?: (risk: string) => void;
@@ -7,42 +14,38 @@ interface RiskBadgesProps {
 
 export default function RiskBadges({ riskMatrix, onRiskClick }: RiskBadgesProps) {
   const clickable = !!onRiskClick;
-  const base = clickable ? 'cursor-pointer hover:opacity-80 transition-opacity' : '';
 
   return (
-    <div className="flex gap-1">
-      {riskMatrix.HIGH > 0 && (
-        <span
-          onClick={() => onRiskClick?.('HIGH')}
-          className={`inline-flex items-center rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300 ${base}`}
-        >
-          {riskMatrix.HIGH} HIGH
-        </span>
-      )}
-      {riskMatrix.MEDIUM > 0 && (
-        <span
-          onClick={() => onRiskClick?.('MEDIUM')}
-          className={`inline-flex items-center rounded bg-orange-100 px-1.5 py-0.5 text-xs font-medium text-orange-700 dark:bg-orange-900/40 dark:text-orange-300 ${base}`}
-        >
-          {riskMatrix.MEDIUM} MED
-        </span>
-      )}
-      {riskMatrix.LOW > 0 && (
-        <span
-          onClick={() => onRiskClick?.('LOW')}
-          className={`inline-flex items-center rounded bg-yellow-100 px-1.5 py-0.5 text-xs font-medium text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300 ${base}`}
-        >
-          {riskMatrix.LOW} LOW
-        </span>
-      )}
-      {riskMatrix.INFO > 0 && (
-        <span
-          onClick={() => onRiskClick?.('INFO')}
-          className={`inline-flex items-center rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 ${base}`}
-        >
-          {riskMatrix.INFO} INFO
-        </span>
-      )}
+    <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+      {(Object.entries(RISK_CFG) as [keyof RiskMatrix, typeof RISK_CFG.HIGH][]).map(([level, cfg]) => {
+        const count = riskMatrix[level];
+        if (!count) return null;
+        return (
+          <span
+            key={level}
+            onClick={() => onRiskClick?.(level)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              padding: '1px 5px',
+              fontSize: '8px',
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              borderRadius: '2px',
+              border: `1px solid ${cfg.border}`,
+              background: cfg.bg,
+              color: cfg.color,
+              cursor: clickable ? 'pointer' : 'default',
+              whiteSpace: 'nowrap',
+              fontFamily: 'inherit',
+              transition: 'opacity 0.15s',
+            }}
+            title={clickable ? `Filter by ${level}` : undefined}
+          >
+            {count} {level}
+          </span>
+        );
+      })}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Scan execution helper for distributed workers (Phase 11).
+"""Scan execution helper for distributed workers.
 
 Workers call run_scan_task() with a task dict received from RabbitMQ.
 The function runs the scan *in-process* (no double-fork needed — the
@@ -14,7 +14,7 @@ Task dict schema:
         "module_list": str,   # comma-separated, e.g. "sfp_dns,sfp_shodan"
         "queue_type":  str,   # "fast" | "slow"
         "api_url":     str,   # base URL of the SpiderFoot API server
-        "result_mode": str,   # "direct" (shared SQLite) | future: "api"
+        "result_mode": str,   # "direct" (shared PostgreSQL)
     }
 """
 
@@ -137,60 +137,49 @@ class _RabbitMQLogHandler(logging.Handler):
         super().close()
 
 
-def _abort_bridge(scan_id: str, api_db_path: str, scan_db_path: str,
-                  stop_event: threading.Event) -> None:
-    """Mirror ABORT-REQUESTED from the API DB to the per-scan DB.
+def _abort_bridge(scan_id: str, stop_event: threading.Event) -> None:
+    """Poll the shared PostgreSQL DB for ABORT-REQUESTED on this scan.
 
-    The SpiderFoot scanner polls its own per-scan DB for the abort flag
-    (sfscan.py: waitForThreads checks scanInstanceGet every ~10 iterations).
-    The stop API endpoint writes ABORT-REQUESTED to the shared API DB
-    (spiderfoot.db).  Without this bridge the two DBs are out of sync and
-    clicking Stop in the UI has no effect on the running scan.
+    The SpiderFoot scanner reads its scan status from the shared DB every
+    ~10 iterations in sfscan.py:waitForThreads().  The stop API endpoint
+    sets status = ABORT-REQUESTED in tbl_scan_instance, so the scanner
+    will detect it directly — no separate per-scan DB bridge is needed.
+
+    This thread simply keeps running until the scan ends so that we can
+    log if an abort was detected.
     """
-    from spiderfoot import SpiderFootDb  # noqa: PLC0415
+    import psycopg2  # noqa: PLC0415
 
-    cfg = {'__database': api_db_path, '__modules__': {}, '__correlationrules__': []}
-    try:
-        api_dbh = SpiderFootDb(cfg)
-    except Exception as e:
-        log.warning("[worker] Abort bridge: cannot open API DB: %s", e)
+    database_url = os.environ.get('DATABASE_URL', '')
+    if not database_url:
+        log.warning("[worker] Abort bridge: DATABASE_URL not set, cannot poll for abort")
         return
 
-    abort_signalled = False  # True once we've confirmed the write landed
+    try:
+        conn = psycopg2.connect(database_url)
+        conn.autocommit = True
+    except Exception as e:
+        log.warning("[worker] Abort bridge: cannot connect to database: %s", e)
+        return
 
-    while not stop_event.wait(timeout=3):
-        try:
-            row = api_dbh.scanInstanceGet(scan_id)
-            should_abort = (row is None) or (row[5] == 'ABORT-REQUESTED')
-            if should_abort:
-                reason = "deleted from API DB" if row is None else "ABORT-REQUESTED"
-                # Propagate to the per-scan DB so sfscan.py detects it.
-                # Use raw SQLite so we can check rowcount — SpiderFootDb.scanInstanceSet
-                # uses UPDATE which silently writes 0 rows if scanInstanceCreate hasn't
-                # run yet (race condition at scan startup).
-                try:
-                    import sqlite3 as _sqlite3  # noqa: PLC0415
-                    _conn = _sqlite3.connect(scan_db_path, timeout=5)
-                    cur = _conn.execute(
-                        "UPDATE tbl_scan_instance SET status = ? WHERE guid = ?",
-                        ('ABORT-REQUESTED', scan_id),
-                    )
-                    _conn.commit()
-                    rows_updated = cur.rowcount
-                    _conn.close()
-                    if rows_updated > 0:
-                        log.info("[worker] Abort bridged to per-scan DB for scan %s (%s)", scan_id, reason)
-                        abort_signalled = True
-                    else:
-                        log.debug("[worker] Abort bridge: per-scan DB record not ready yet for %s, retrying…", scan_id)
-                except Exception as e:
-                    log.warning("[worker] Abort bridge: cannot write per-scan DB: %s", e)
-
-                if abort_signalled:
-                    break  # Write confirmed — scanner will self-abort and set ABORTED
-                # else: loop again; scanInstanceCreate hasn't run yet
-        except Exception as e:
-            log.debug("[worker] Abort bridge poll error: %s", e)
+    try:
+        while not stop_event.wait(timeout=3):
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT status FROM tbl_scan_instance WHERE guid = %s",
+                    (scan_id,),
+                )
+                row = cur.fetchone()
+                cur.close()
+                if row and row[0] == 'ABORT-REQUESTED':
+                    log.info("[worker] Abort detected in shared DB for scan %s", scan_id)
+                    break
+            except Exception as e:
+                log.debug("[worker] Abort bridge poll error: %s", e)
+    finally:
+        with contextlib.suppress(Exception):
+            conn.close()
 
 
 def _publish_lifecycle(scan_id: str, lifecycle: str, rabbitmq_url: str) -> None:
@@ -239,23 +228,19 @@ def _publish_lifecycle(scan_id: str, lifecycle: str, rabbitmq_url: str) -> None:
         log.error("[worker] Failed to publish %s lifecycle for scan %s: %s", lifecycle, scan_id, e)
 
 
-def _build_task_config(task: dict, SpiderFoot, SpiderFootDb, SpiderFootHelpers,
-                       data_path: str) -> tuple:
-    """Build scanner config and per-scan DB path, removing any stale per-scan DB.
+def _build_task_config(task: dict, SpiderFoot, SpiderFootDb, SpiderFootHelpers) -> dict:
+    """Build scanner config using shared PostgreSQL.
+
+    Reads global config from the shared DB and returns a config dict
+    suitable for passing to startSpiderFootScanner().  No per-scan
+    SQLite files are created — the scanner writes directly to PostgreSQL.
 
     Returns:
-        tuple: (sf_cfg, scan_db_path, db_path)
+        dict: scanner configuration with __database_url set
     """
-    scan_id = task.get('scan_id', '<unknown>')
-    db_path = os.path.join(data_path, 'spiderfoot.db')
-    scan_db_path = os.path.join(data_path, f'spiderfoot_{scan_id}.db')
+    import psycopg2  # noqa: PLC0415
 
-    if os.path.exists(scan_db_path):
-        try:
-            os.unlink(scan_db_path)
-            log.info("[worker] Removed stale scan DB for %s (task redelivery)", scan_id)
-        except OSError as e:
-            log.warning("[worker] Could not remove stale scan DB for %s: %s", scan_id, e)
+    database_url = os.environ.get('DATABASE_URL', '')
 
     default_config = {
         '_debug': False,
@@ -268,7 +253,7 @@ def _build_task_config(task: dict, SpiderFoot, SpiderFootDb, SpiderFootHelpers,
         '_internettlds': 'https://publicsuffix.org/list/effective_tld_names.dat',
         '_internettlds_cache': 72,
         '_genericusers': ",".join(SpiderFootHelpers.usernamesFromWordlists(['generic-usernames'])),
-        '__database': db_path,
+        '__database_url': database_url,
         '__modules__': {},
         '__correlationrules__': [],
         '_socks1type': '',
@@ -278,14 +263,27 @@ def _build_task_config(task: dict, SpiderFoot, SpiderFootDb, SpiderFootHelpers,
         '_socks5pwd': '',
     }
 
-    dbh = SpiderFootDb(default_config)
-    db_cfg = dbh.configGet()
-    if db_cfg:
-        sf_cfg = SpiderFoot(default_config).configUnserialize(db_cfg, default_config)
+    if database_url:
+        try:
+            conn = psycopg2.connect(database_url)
+            try:
+                dbh = SpiderFootDb(conn=conn)
+                db_cfg = dbh.configGet()
+                conn.commit()
+            finally:
+                conn.close()
+            if db_cfg:
+                sf_cfg = SpiderFoot(default_config).configUnserialize(db_cfg, default_config)
+            else:
+                sf_cfg = default_config.copy()
+        except Exception as e:
+            log.warning("[worker] Could not load config from DB, using defaults: %s", e)
+            sf_cfg = default_config.copy()
     else:
+        log.warning("[worker] DATABASE_URL not set — using default config")
         sf_cfg = default_config.copy()
 
-    sf_cfg['__database'] = scan_db_path
+    sf_cfg['__database_url'] = database_url
 
     mod_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -297,7 +295,7 @@ def _build_task_config(task: dict, SpiderFoot, SpiderFootDb, SpiderFootHelpers,
         'sfp_phishstats.py',
     ])
 
-    return sf_cfg, scan_db_path, db_path
+    return sf_cfg
 
 
 def _start_log_forwarding(scan_id: str, rabbitmq_url: str) -> tuple:
@@ -322,34 +320,42 @@ def _start_log_forwarding(scan_id: str, rabbitmq_url: str) -> tuple:
     return logging_queue, listener, rmq_log_handler
 
 
-def _handle_scan_completion(scan_id: str, scan_db_path: str, SpiderFootDb,
+def _handle_scan_completion(scan_id: str, SpiderFootDb,
                             rabbitmq_url: str, listener, rmq_log_handler) -> None:
     """Tear down log forwarding and publish terminal lifecycle if needed.
 
-    Called from run_scan_task()'s finally block to stop the log listener and
-    check whether ABORTED or FAILED must be published to RabbitMQ.
+    Called from run_scan_task()'s finally block.  Reads the scan's final
+    status from shared PostgreSQL and publishes ABORTED/FAILED to RabbitMQ
+    if the scan did not finish normally.
     """
+    import psycopg2  # noqa: PLC0415
+
     if listener:
         listener.stop()
     if rmq_log_handler:
         rmq_log_handler.close()
 
-    if os.path.exists(scan_db_path):
-        try:
-            _chk = SpiderFootDb({'__database': scan_db_path, '__modules__': {},
-                                 '__correlationrules__': []})
-            row = _chk.scanInstanceGet(scan_id)
-            final_status = row[5] if row else None
-            if final_status == 'ABORTED':
-                _publish_lifecycle(scan_id, 'ABORTED', rabbitmq_url)
-            elif final_status == 'ERROR-FAILED':
-                _publish_lifecycle(scan_id, 'FAILED', rabbitmq_url)
-        except Exception as e:
-            log.error("[worker] Could not read final scan status from per-scan DB: %s", e)
+    database_url = os.environ.get('DATABASE_URL', '')
+    if not database_url:
+        log.warning("[worker] Cannot check final scan status: DATABASE_URL not set")
+        return
 
-    with contextlib.suppress(OSError):
-        if os.path.exists(scan_db_path):
-            os.unlink(scan_db_path)
+    try:
+        conn = psycopg2.connect(database_url)
+        try:
+            dbh = SpiderFootDb(conn=conn)
+            row = dbh.scanInstanceGet(scan_id)
+            final_status = row[5] if row else None
+            conn.commit()
+        finally:
+            conn.close()
+
+        if final_status == 'ABORTED':
+            _publish_lifecycle(scan_id, 'ABORTED', rabbitmq_url)
+        elif final_status == 'ERROR-FAILED':
+            _publish_lifecycle(scan_id, 'FAILED', rabbitmq_url)
+    except Exception as e:
+        log.error("[worker] Could not read final scan status from DB: %s", e)
 
 
 def run_scan_task(task: dict) -> None:
@@ -378,18 +384,14 @@ def run_scan_task(task: dict) -> None:
     from sfscan import startSpiderFootScanner  # noqa: PLC0415
     from spiderfoot import SpiderFootDb, SpiderFootHelpers  # noqa: PLC0415
 
-    data_path = os.environ.get('SPIDERFOOT_DATA', '/var/lib/spiderfoot')
-    sf_cfg, scan_db_path, db_path = _build_task_config(
-        task, SpiderFoot, SpiderFootDb, SpiderFootHelpers, data_path,
-    )
+    sf_cfg = _build_task_config(task, SpiderFoot, SpiderFootDb, SpiderFootHelpers)
     modlist = [m.strip() for m in module_list_str.split(',') if m.strip()]
 
-    # Start abort bridge: polls shared API DB and propagates ABORT-REQUESTED
-    # to the per-scan DB so sfscan.py detects it.
+    # Start abort bridge: polls shared PostgreSQL for ABORT-REQUESTED
     abort_stop = threading.Event()
     abort_thread = threading.Thread(
         target=_abort_bridge,
-        args=(scan_id, db_path, scan_db_path, abort_stop),
+        args=(scan_id, abort_stop),
         name=f"AbortBridge-{scan_id}",
         daemon=True,
     )
@@ -406,8 +408,6 @@ def run_scan_task(task: dict) -> None:
         raise
     finally:
         abort_stop.set()
-        _handle_scan_completion(
-            scan_id, scan_db_path, SpiderFootDb, rabbitmq_url, listener, rmq_log_handler,
-        )
+        _handle_scan_completion(scan_id, SpiderFootDb, rabbitmq_url, listener, rmq_log_handler)
 
     log.info("[worker] Scan %s completed", scan_id)

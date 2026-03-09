@@ -5,12 +5,12 @@ import ToastContainer from '../common/ToastContainer';
 
 export default function Layout() {
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--sf-bg)]">
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', background: 'var(--sf-bg)' }}>
       <Sidebar />
-      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, overflow: 'hidden' }}>
         <Header />
-        <main className="flex-1 overflow-auto">
-          <div className="mx-auto max-w-7xl px-6 py-6">
+        <main style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+          <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '20px 24px' }}>
             <Outlet />
           </div>
         </main>

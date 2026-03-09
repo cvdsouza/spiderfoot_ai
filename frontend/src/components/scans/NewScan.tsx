@@ -7,6 +7,12 @@ import type { ModuleInfo, ScanCreate } from '../../types';
 
 type SelectionMode = 'usecase' | 'types' | 'modules';
 
+const inputStyle = {
+  background: '#060A0F', border: '1px solid #18181B', borderRadius: '2px',
+  padding: '10px 12px', color: '#F4F4F5', fontSize: '12px', outline: 'none', width: '100%',
+  fontFamily: 'inherit',
+};
+
 export default function NewScan() {
   const navigate = useNavigate();
   const [scanName, setScanName] = useState('');
@@ -37,33 +43,20 @@ export default function NewScan() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-
     if (!scanName.trim() || !scanTarget.trim()) {
       setError('Scan name and target are required.');
       return;
     }
-
     setIsSubmitting(true);
     try {
-      const payload: ScanCreate = {
-        scan_name: scanName,
-        scan_target: scanTarget,
-      };
-
-      if (mode === 'usecase') {
-        payload.use_case = useCase;
-      } else if (mode === 'modules') {
-        payload.module_list = Array.from(selectedModules).join(',');
-      } else if (mode === 'types') {
-        payload.type_list = Array.from(selectedTypes).join(',');
-      }
+      const payload: ScanCreate = { scan_name: scanName, scan_target: scanTarget };
+      if (mode === 'usecase') payload.use_case = useCase;
+      else if (mode === 'modules') payload.module_list = Array.from(selectedModules).join(',');
+      else if (mode === 'types') payload.type_list = Array.from(selectedTypes).join(',');
 
       const { data } = await createScan(payload);
-      if (data[0] === 'SUCCESS') {
-        navigate(`/scaninfo/${data[1]}`);
-      } else {
-        setError(data[1] || 'Failed to start scan');
-      }
+      if (data[0] === 'SUCCESS') navigate(`/scaninfo/${data[1]}`);
+      else setError(data[1] || 'Failed to start scan');
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } }).response?.data?.detail;
       setError(detail || 'Failed to start scan');
@@ -72,57 +65,87 @@ export default function NewScan() {
     }
   };
 
-  return (
-    <div className="max-w-4xl">
-      <h1 className="mb-6 text-2xl font-bold">New Scan</h1>
+  const USE_CASES = [
+    { value: 'all',         label: 'ALL MODULES',  desc: 'Run all enabled modules' },
+    { value: 'Footprint',   label: 'FOOTPRINT',    desc: 'Passive and active recon' },
+    { value: 'Investigate', label: 'INVESTIGATE',  desc: 'Investigate a target' },
+    { value: 'Passive',     label: 'PASSIVE',      desc: 'Passive reconnaissance only' },
+  ];
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+  return (
+    <div style={{ maxWidth: '800px' }}>
+      <div style={{ marginBottom: '24px' }}>
+        <div style={{ fontSize: '9px', letterSpacing: '0.2em', color: '#52525B', marginBottom: '4px' }}>
+          INTELLIGENCE OPERATIONS
+        </div>
+        <h1 style={{ fontSize: '20px', fontWeight: 700, color: '#F4F4F5', letterSpacing: '0.05em' }}>
+          INITIATE SCAN
+        </h1>
+      </div>
+
+      <form onSubmit={handleSubmit}>
         {error && (
-          <div className="rounded-md bg-red-50 p-4 text-sm text-red-800 dark:bg-red-900/20 dark:text-red-200">
-            {error}
+          <div style={{
+            marginBottom: '16px', padding: '12px 16px',
+            background: '#280A08', borderLeft: '3px solid #FF3B30',
+            fontSize: '11px', color: '#FF3B30',
+          }}>
+            ⚠ {error}
           </div>
         )}
 
-        <div className="grid gap-4 md:grid-cols-2">
+        {/* Name + Target */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
           <div>
-            <label className="mb-1 block text-sm font-medium">Scan Name</label>
+            <div style={{ fontSize: '9px', letterSpacing: '0.15em', color: '#52525B', marginBottom: '6px' }}>
+              OPERATION NAME
+            </div>
             <input
               type="text"
               value={scanName}
               onChange={(e) => setScanName(e.target.value)}
-              placeholder="My Scan"
-              className="w-full rounded-md border border-[var(--sf-border)] bg-[var(--sf-bg)] px-3 py-2 text-sm"
+              placeholder="my-scan-2024"
+              style={inputStyle}
+              onFocus={(e) => (e.currentTarget.style.borderColor = '#00B4FF')}
+              onBlur={(e) => (e.currentTarget.style.borderColor = '#18181B')}
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium">Target</label>
+            <div style={{ fontSize: '9px', letterSpacing: '0.15em', color: '#52525B', marginBottom: '6px' }}>
+              TARGET
+            </div>
             <input
               type="text"
               value={scanTarget}
               onChange={(e) => setScanTarget(e.target.value)}
               placeholder="example.com, 1.2.3.4, user@email.com"
-              className="w-full rounded-md border border-[var(--sf-border)] bg-[var(--sf-bg)] px-3 py-2 text-sm"
+              style={inputStyle}
+              onFocus={(e) => (e.currentTarget.style.borderColor = '#00B4FF')}
+              onBlur={(e) => (e.currentTarget.style.borderColor = '#18181B')}
             />
           </div>
         </div>
 
-        {/* Selection mode tabs */}
-        <div>
-          <div className="mb-3 flex gap-1 rounded-lg border border-[var(--sf-border)] p-1">
-            {[
-              { key: 'usecase' as SelectionMode, label: 'By Use Case' },
-              { key: 'types' as SelectionMode, label: 'By Data Type' },
-              { key: 'modules' as SelectionMode, label: 'By Module' },
-            ].map((tab) => (
+        {/* Mode selection */}
+        <div style={{ marginBottom: '20px' }}>
+          <div style={{ fontSize: '9px', letterSpacing: '0.15em', color: '#52525B', marginBottom: '10px' }}>
+            MODULE SELECTION
+          </div>
+          <div style={{ display: 'flex', gap: '2px', background: '#060A0F', padding: '3px', border: '1px solid #18181B', borderRadius: '2px', marginBottom: '12px' }}>
+            {([
+              { key: 'usecase' as SelectionMode, label: 'USE CASE' },
+              { key: 'types' as SelectionMode,   label: 'DATA TYPE' },
+              { key: 'modules' as SelectionMode, label: 'MODULE' },
+            ]).map((tab) => (
               <button
                 key={tab.key}
                 type="button"
                 onClick={() => setMode(tab.key)}
-                className={`rounded-md px-3 py-1.5 text-sm ${
-                  mode === tab.key
-                    ? 'bg-[var(--sf-primary)] text-white'
-                    : 'text-[var(--sf-text-muted)] hover:bg-[var(--sf-bg-secondary)]'
-                }`}
+                style={{
+                  padding: '6px 14px', background: mode === tab.key ? '#00B4FF' : 'transparent',
+                  color: mode === tab.key ? '#000' : '#52525B', border: 'none', borderRadius: '2px',
+                  fontSize: '10px', fontWeight: 700, letterSpacing: '0.12em', cursor: 'pointer',
+                }}
               >
                 {tab.label}
               </button>
@@ -130,45 +153,41 @@ export default function NewScan() {
           </div>
 
           {mode === 'usecase' && (
-            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-              {[
-                { value: 'all', label: 'All', desc: 'Run all modules' },
-                { value: 'Footprint', label: 'Footprint', desc: 'Passive and active recon' },
-                { value: 'Investigate', label: 'Investigate', desc: 'Investigate a target' },
-                { value: 'Passive', label: 'Passive', desc: 'Passive reconnaissance only' },
-              ].map((uc) => (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+              {USE_CASES.map((uc) => (
                 <label
                   key={uc.value}
-                  className={`cursor-pointer rounded-lg border p-3 ${
-                    useCase === uc.value
-                      ? 'border-[var(--sf-primary)] bg-blue-50 dark:bg-blue-900/20'
-                      : 'border-[var(--sf-border)] hover:bg-[var(--sf-bg-secondary)]'
-                  }`}
+                  style={{
+                    display: 'block', padding: '12px',
+                    background: useCase === uc.value ? '#001828' : '#0A0E14',
+                    border: `1px solid ${useCase === uc.value ? '#00B4FF' : '#18181B'}`,
+                    borderRadius: '2px', cursor: 'pointer',
+                    transition: 'border-color 0.15s',
+                  }}
                 >
-                  <input
-                    type="radio"
-                    name="usecase"
-                    value={uc.value}
-                    checked={useCase === uc.value}
-                    onChange={(e) => setUseCase(e.target.value)}
-                    className="sr-only"
-                  />
-                  <div className="font-medium">{uc.label}</div>
-                  <div className="text-xs text-[var(--sf-text-muted)]">{uc.desc}</div>
+                  <input type="radio" name="usecase" value={uc.value} checked={useCase === uc.value} onChange={(e) => setUseCase(e.target.value)} style={{ display: 'none' }} />
+                  <div style={{ fontSize: '10px', fontWeight: 700, letterSpacing: '0.1em', color: useCase === uc.value ? '#00B4FF' : '#F4F4F5', marginBottom: '4px' }}>
+                    {uc.label}
+                  </div>
+                  <div style={{ fontSize: '10px', color: '#52525B' }}>{uc.desc}</div>
                 </label>
               ))}
             </div>
           )}
 
           {mode === 'modules' && (
-            <div className="max-h-64 overflow-y-auto rounded-lg border border-[var(--sf-border)] p-3">
-              <div className="mb-2 flex gap-2">
-                <button type="button" onClick={() => setSelectedModules(new Set(modules.map((m) => m.name)))} className="text-xs text-[var(--sf-primary)]">Select All</button>
-                <button type="button" onClick={() => setSelectedModules(new Set())} className="text-xs text-[var(--sf-primary)]">Deselect All</button>
+            <div style={{ border: '1px solid #18181B', borderRadius: '2px', overflow: 'hidden' }}>
+              <div style={{ display: 'flex', gap: '12px', padding: '8px 12px', background: '#060A0F', borderBottom: '1px solid #18181B' }}>
+                <button type="button" onClick={() => setSelectedModules(new Set(modules.map((m) => m.name)))} style={{ background: 'none', border: 'none', color: '#00B4FF', fontSize: '10px', letterSpacing: '0.1em', cursor: 'pointer', fontFamily: 'inherit' }}>SELECT ALL</button>
+                <button type="button" onClick={() => setSelectedModules(new Set())} style={{ background: 'none', border: 'none', color: '#52525B', fontSize: '10px', letterSpacing: '0.1em', cursor: 'pointer', fontFamily: 'inherit' }}>CLEAR</button>
+                <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#52525B' }}>{selectedModules.size} SELECTED</span>
               </div>
-              <div className="grid gap-1">
+              <div style={{ maxHeight: '240px', overflowY: 'auto', padding: '8px 0' }}>
                 {modules.map((mod) => (
-                  <label key={mod.name} className="flex items-center gap-2 text-sm">
+                  <label key={mod.name} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 12px', cursor: 'pointer' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#0D1117')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  >
                     <input
                       type="checkbox"
                       checked={selectedModules.has(mod.name)}
@@ -178,10 +197,10 @@ export default function NewScan() {
                         else next.delete(mod.name);
                         setSelectedModules(next);
                       }}
-                      className="rounded"
+                      style={{ accentColor: '#00B4FF', cursor: 'pointer' }}
                     />
-                    <span className="font-mono text-xs">{mod.name}</span>
-                    <span className="text-xs text-[var(--sf-text-muted)]">{mod.descr}</span>
+                    <span style={{ fontFamily: 'monospace', fontSize: '10px', color: '#00B4FF', width: '180px', flexShrink: 0 }}>{mod.name}</span>
+                    <span style={{ fontSize: '10px', color: '#71717A' }}>{mod.descr}</span>
                   </label>
                 ))}
               </div>
@@ -189,14 +208,18 @@ export default function NewScan() {
           )}
 
           {mode === 'types' && (
-            <div className="max-h-64 overflow-y-auto rounded-lg border border-[var(--sf-border)] p-3">
-              <div className="mb-2 flex gap-2">
-                <button type="button" onClick={() => setSelectedTypes(new Set(eventTypes.map((t) => t[1])))} className="text-xs text-[var(--sf-primary)]">Select All</button>
-                <button type="button" onClick={() => setSelectedTypes(new Set())} className="text-xs text-[var(--sf-primary)]">Deselect All</button>
+            <div style={{ border: '1px solid #18181B', borderRadius: '2px', overflow: 'hidden' }}>
+              <div style={{ display: 'flex', gap: '12px', padding: '8px 12px', background: '#060A0F', borderBottom: '1px solid #18181B' }}>
+                <button type="button" onClick={() => setSelectedTypes(new Set(eventTypes.map((t) => t[1])))} style={{ background: 'none', border: 'none', color: '#00B4FF', fontSize: '10px', letterSpacing: '0.1em', cursor: 'pointer', fontFamily: 'inherit' }}>SELECT ALL</button>
+                <button type="button" onClick={() => setSelectedTypes(new Set())} style={{ background: 'none', border: 'none', color: '#52525B', fontSize: '10px', letterSpacing: '0.1em', cursor: 'pointer', fontFamily: 'inherit' }}>CLEAR</button>
+                <span style={{ marginLeft: 'auto', fontSize: '10px', color: '#52525B' }}>{selectedTypes.size} SELECTED</span>
               </div>
-              <div className="grid gap-1">
+              <div style={{ maxHeight: '240px', overflowY: 'auto', padding: '8px 0' }}>
                 {eventTypes.map((t) => (
-                  <label key={t[1]} className="flex items-center gap-2 text-sm">
+                  <label key={t[1]} style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '4px 12px', cursor: 'pointer' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#0D1117')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                  >
                     <input
                       type="checkbox"
                       checked={selectedTypes.has(t[1])}
@@ -206,10 +229,10 @@ export default function NewScan() {
                         else next.delete(t[1]);
                         setSelectedTypes(next);
                       }}
-                      className="rounded"
+                      style={{ accentColor: '#00B4FF', cursor: 'pointer' }}
                     />
-                    <span>{t[0]}</span>
-                    <span className="font-mono text-xs text-[var(--sf-text-muted)]">({t[1]})</span>
+                    <span style={{ fontSize: '11px', color: '#A1A1AA', flex: 1 }}>{t[0]}</span>
+                    <span style={{ fontFamily: 'monospace', fontSize: '9px', color: '#52525B' }}>{t[1]}</span>
                   </label>
                 ))}
               </div>
@@ -220,9 +243,16 @@ export default function NewScan() {
         <button
           type="submit"
           disabled={isSubmitting}
-          className="rounded-md bg-[var(--sf-primary)] px-6 py-2 text-sm font-medium text-white hover:bg-[var(--sf-primary-hover)] disabled:opacity-50"
+          style={{
+            background: isSubmitting ? '#060A0F' : '#00B4FF',
+            color: isSubmitting ? '#3F3F46' : '#000',
+            border: `1px solid ${isSubmitting ? '#27272A' : '#00B4FF'}`,
+            padding: '10px 24px', borderRadius: '2px',
+            fontSize: '11px', fontWeight: 700, letterSpacing: '0.15em',
+            cursor: isSubmitting ? 'not-allowed' : 'pointer',
+          }}
         >
-          {isSubmitting ? 'Starting...' : 'Start Scan'}
+          {isSubmitting ? '◈ INITIALIZING...' : '◈ LAUNCH SCAN'}
         </button>
       </form>
     </div>

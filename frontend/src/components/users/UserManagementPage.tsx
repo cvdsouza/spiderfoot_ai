@@ -5,6 +5,12 @@ import { useAuthStore } from '../../stores/authStore';
 import UserForm from './UserForm';
 import type { UserRecord, RoleInfo } from '../../types';
 
+const inputStyle = {
+  background: '#060A0F', border: '1px solid #18181B', borderRadius: '2px',
+  padding: '6px 10px', color: '#F4F4F5', fontSize: '11px', outline: 'none',
+  fontFamily: 'inherit', width: '120px',
+};
+
 export default function UserManagementPage() {
   const queryClient = useQueryClient();
   const currentUser = useAuthStore((s) => s.user);
@@ -15,6 +21,7 @@ export default function UserManagementPage() {
   const [editRoles, setEditRoles] = useState<string[]>([]);
   const [resetPwId, setResetPwId] = useState<string | null>(null);
   const [newPw, setNewPw] = useState('');
+  const [deletePendingId, setDeletePendingId] = useState<string | null>(null);
 
   const { data: users = [], isLoading: usersLoading } = useQuery<UserRecord[]>({
     queryKey: ['users'],
@@ -31,7 +38,7 @@ export default function UserManagementPage() {
     onSuccess: (result) => {
       if (result[0] === 'SUCCESS') {
         setShowForm(false);
-        setSuccess('User created successfully');
+        setSuccess('User created.');
         queryClient.invalidateQueries({ queryKey: ['users'] });
       } else {
         setError(result[1] as string);
@@ -45,7 +52,7 @@ export default function UserManagementPage() {
     onSuccess: (result) => {
       if (result[0] === 'SUCCESS') {
         setEditingId(null);
-        setSuccess('User updated');
+        setSuccess('User updated.');
         queryClient.invalidateQueries({ queryKey: ['users'] });
       } else {
         setError(result[1] as string);
@@ -58,13 +65,14 @@ export default function UserManagementPage() {
     mutationFn: deleteUser,
     onSuccess: (result) => {
       if (result[0] === 'SUCCESS') {
-        setSuccess('User deactivated');
+        setSuccess('User deactivated.');
+        setDeletePendingId(null);
         queryClient.invalidateQueries({ queryKey: ['users'] });
       } else {
         setError(result[1]);
       }
     },
-    onError: () => setError('Failed to delete user'),
+    onError: () => setError('Failed to disable user'),
   });
 
   const resetPwMutation = useMutation({
@@ -73,7 +81,7 @@ export default function UserManagementPage() {
       if (result[0] === 'SUCCESS') {
         setResetPwId(null);
         setNewPw('');
-        setSuccess('Password reset successfully');
+        setSuccess('Password reset.');
       } else {
         setError(result[1]);
       }
@@ -83,7 +91,6 @@ export default function UserManagementPage() {
 
   function startEdit(user: UserRecord) {
     setEditingId(user.id);
-    // Map role names to role IDs
     const roleIds = user.roles
       .map((name) => roles.find((r) => r.name === name)?.id)
       .filter(Boolean) as string[];
@@ -94,187 +101,192 @@ export default function UserManagementPage() {
     setEditRoles((prev) => (prev.includes(roleId) ? prev.filter((r) => r !== roleId) : [...prev, roleId]));
   }
 
-  function saveEdit(user: UserRecord) {
-    updateMutation.mutate({ id: user.id, body: { role_ids: editRoles } });
-  }
-
-  // Clear messages after 3 seconds
   if (error || success) {
-    setTimeout(() => {
-      setError('');
-      setSuccess('');
-    }, 3000);
+    setTimeout(() => { setError(''); setSuccess(''); }, 3000);
   }
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-[var(--sf-text)]">User Management</h1>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+        <div>
+          <div style={{ fontSize: '9px', letterSpacing: '0.2em', color: '#52525B', marginBottom: '4px' }}>
+            ACCESS CONTROL
+          </div>
+          <h1 style={{ fontSize: '20px', fontWeight: 700, color: '#F4F4F5', letterSpacing: '0.05em' }}>
+            USER MANAGEMENT
+          </h1>
+        </div>
         {!showForm && (
           <button
             onClick={() => setShowForm(true)}
-            className="px-4 py-2 rounded font-medium bg-[var(--sf-accent)] text-white hover:opacity-90 transition-opacity"
+            style={{
+              background: '#00B4FF', color: '#000', padding: '8px 16px',
+              borderRadius: '2px', fontSize: '11px', fontWeight: 700,
+              letterSpacing: '0.12em', border: 'none', cursor: 'pointer',
+            }}
           >
-            Create User
+            + CREATE USER
           </button>
         )}
       </div>
 
       {error && (
-        <div className="mb-4 bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded px-3 py-2">
-          {error}
+        <div style={{ marginBottom: '16px', padding: '12px 16px', background: '#280A08', borderLeft: '3px solid #FF3B30', fontSize: '11px', color: '#FF3B30' }}>
+          ⚠ {error}
         </div>
       )}
       {success && (
-        <div className="mb-4 bg-green-500/10 border border-green-500/30 text-green-400 text-sm rounded px-3 py-2">
-          {success}
+        <div style={{ marginBottom: '16px', padding: '12px 16px', background: '#001A08', borderLeft: '3px solid #32D74B', fontSize: '11px', color: '#32D74B' }}>
+          ✓ {success}
         </div>
       )}
 
       {showForm && (
-        <div className="mb-6 bg-[var(--sf-card)] border border-[var(--sf-border)] rounded-lg p-4">
-          <h2 className="text-lg font-semibold text-[var(--sf-text)] mb-4">Create New User</h2>
+        <div style={{ marginBottom: '20px', background: '#0A0E14', border: '1px solid #18181B', borderRadius: '2px', padding: '16px' }}>
+          <div style={{ fontSize: '9px', letterSpacing: '0.2em', color: '#52525B', marginBottom: '12px' }}>CREATE NEW USER</div>
           <UserForm
             roles={roles}
             loading={createMutation.isPending}
-            onSubmit={async (data) => {
-              setError('');
-              await createMutation.mutateAsync(data);
-            }}
+            onSubmit={async (data) => { setError(''); await createMutation.mutateAsync(data); }}
             onCancel={() => setShowForm(false)}
           />
         </div>
       )}
 
       {usersLoading ? (
-        <div className="text-[var(--sf-text-secondary)]">Loading users...</div>
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '48px' }}>
+          <div style={{ width: '24px', height: '24px', borderRadius: '50%', border: '2px solid #00B4FF30', borderTopColor: '#00B4FF', animation: 'sf-spin 1.2s linear infinite' }} />
+        </div>
       ) : (
-        <div className="bg-[var(--sf-card)] border border-[var(--sf-border)] rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
+        <div style={{ border: '1px solid #18181B', borderRadius: '2px', overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
             <thead>
-              <tr className="border-b border-[var(--sf-border)]">
-                <th className="text-left px-4 py-3 text-[var(--sf-text-secondary)] font-medium">Username</th>
-                <th className="text-left px-4 py-3 text-[var(--sf-text-secondary)] font-medium">Display Name</th>
-                <th className="text-left px-4 py-3 text-[var(--sf-text-secondary)] font-medium">Roles</th>
-                <th className="text-left px-4 py-3 text-[var(--sf-text-secondary)] font-medium">Status</th>
-                <th className="text-right px-4 py-3 text-[var(--sf-text-secondary)] font-medium">Actions</th>
+              <tr style={{ background: '#060A0F', borderBottom: '1px solid #18181B' }}>
+                {['USERNAME', 'DISPLAY NAME', 'ROLES', 'STATUS', 'ACTIONS'].map((h) => (
+                  <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: '8px', letterSpacing: '0.15em', color: '#3F3F46', fontWeight: 700 }}>
+                    {h}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {users.map((u) => (
-                <tr key={u.id} className="border-b border-[var(--sf-border)] last:border-0">
-                  <td className="px-4 py-3 text-[var(--sf-text)] font-medium">{u.username}</td>
-                  <td className="px-4 py-3 text-[var(--sf-text)]">{u.display_name || '-'}</td>
-                  <td className="px-4 py-3">
+                <tr key={u.id} style={{ borderBottom: '1px solid #0D1117' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#0D1117')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <td style={{ padding: '10px 12px', color: '#F4F4F5', fontWeight: 600 }}>{u.username}</td>
+                  <td style={{ padding: '10px 12px', color: '#A1A1AA' }}>{u.display_name || '—'}</td>
+                  <td style={{ padding: '10px 12px' }}>
                     {editingId === u.id ? (
-                      <div className="flex flex-wrap gap-1">
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                         {roles.map((role) => (
                           <button
                             key={role.id}
                             type="button"
                             onClick={() => toggleEditRole(role.id)}
-                            className={`px-2 py-0.5 rounded text-xs font-medium border transition-colors ${
-                              editRoles.includes(role.id)
-                                ? 'bg-[var(--sf-accent)] text-white border-[var(--sf-accent)]'
-                                : 'border-[var(--sf-border)] text-[var(--sf-text-secondary)]'
-                            }`}
+                            style={{
+                              padding: '3px 8px', borderRadius: '2px',
+                              fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', cursor: 'pointer',
+                              background: editRoles.includes(role.id) ? '#00B4FF' : '#060A0F',
+                              color: editRoles.includes(role.id) ? '#000' : '#52525B',
+                              border: `1px solid ${editRoles.includes(role.id) ? '#00B4FF' : '#27272A'}`,
+                            }}
                           >
-                            {role.name}
+                            {role.name.toUpperCase()}
                           </button>
                         ))}
                       </div>
                     ) : (
-                      <div className="flex flex-wrap gap-1">
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                         {u.roles.map((role) => (
                           <span
                             key={role}
-                            className="text-xs font-medium px-2 py-0.5 rounded bg-[var(--sf-accent)]/10 text-[var(--sf-accent)] capitalize"
+                            style={{ background: '#001828', color: '#00B4FF', border: '1px solid #00B4FF30', borderRadius: '2px', padding: '2px 6px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em' }}
                           >
-                            {role}
+                            {role.toUpperCase()}
                           </span>
                         ))}
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`text-xs font-medium px-2 py-0.5 rounded ${
-                        u.is_active ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'
-                      }`}
-                    >
-                      {u.is_active ? 'Active' : 'Disabled'}
+                  <td style={{ padding: '10px 12px' }}>
+                    <span style={{
+                      background: u.is_active ? '#001A08' : '#280A08',
+                      color: u.is_active ? '#32D74B' : '#FF3B30',
+                      border: `1px solid ${u.is_active ? '#32D74B40' : '#FF3B3040'}`,
+                      borderRadius: '2px', padding: '2px 7px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em',
+                    }}>
+                      {u.is_active ? 'ACTIVE' : 'DISABLED'}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex items-center justify-end gap-2">
+                  <td style={{ padding: '10px 12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       {editingId === u.id ? (
                         <>
                           <button
-                            onClick={() => saveEdit(u)}
-                            className="text-xs px-2 py-1 rounded bg-green-500/10 text-green-400 hover:bg-green-500/20"
+                            onClick={() => updateMutation.mutate({ id: u.id, body: { role_ids: editRoles } })}
+                            style={{ background: '#001A08', color: '#32D74B', border: '1px solid #32D74B40', padding: '4px 10px', borderRadius: '2px', fontSize: '9px', fontWeight: 700, letterSpacing: '0.08em', cursor: 'pointer' }}
                           >
-                            Save
+                            SAVE
                           </button>
                           <button
                             onClick={() => setEditingId(null)}
-                            className="text-xs px-2 py-1 rounded bg-[var(--sf-bg-secondary)] text-[var(--sf-text-secondary)]"
+                            style={{ background: 'none', color: '#52525B', border: '1px solid #27272A', padding: '4px 10px', borderRadius: '2px', fontSize: '9px', cursor: 'pointer' }}
                           >
-                            Cancel
+                            CANCEL
                           </button>
                         </>
                       ) : (
                         <>
                           <button
                             onClick={() => startEdit(u)}
-                            className="text-xs px-2 py-1 rounded text-[var(--sf-text-secondary)] hover:bg-[var(--sf-bg-secondary)]"
+                            style={{ background: 'none', color: '#52525B', border: '1px solid #27272A', padding: '4px 10px', borderRadius: '2px', fontSize: '9px', letterSpacing: '0.08em', cursor: 'pointer' }}
                           >
-                            Edit Roles
+                            ROLES
                           </button>
                           {resetPwId === u.id ? (
-                            <div className="flex items-center gap-1">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                               <input
                                 type="password"
                                 value={newPw}
                                 onChange={(e) => setNewPw(e.target.value)}
-                                placeholder="New password"
-                                className="w-28 px-2 py-1 text-xs rounded border border-[var(--sf-border)] bg-[var(--sf-bg)] text-[var(--sf-text)]"
+                                placeholder="new password"
+                                style={inputStyle}
                               />
                               <button
                                 onClick={() => resetPwMutation.mutate({ id: u.id, pw: newPw })}
                                 disabled={newPw.length < 8}
-                                className="text-xs px-2 py-1 rounded bg-[var(--sf-accent)] text-white disabled:opacity-50"
+                                style={{ background: newPw.length < 8 ? '#060A0F' : '#00B4FF', color: newPw.length < 8 ? '#3F3F46' : '#000', border: 'none', padding: '6px 10px', borderRadius: '2px', fontSize: '9px', fontWeight: 700, cursor: newPw.length < 8 ? 'not-allowed' : 'pointer' }}
                               >
-                                Set
+                                SET
                               </button>
-                              <button
-                                onClick={() => {
-                                  setResetPwId(null);
-                                  setNewPw('');
-                                }}
-                                className="text-xs px-2 py-1 rounded text-[var(--sf-text-secondary)]"
-                              >
-                                X
-                              </button>
+                              <button onClick={() => { setResetPwId(null); setNewPw(''); }} style={{ background: 'none', color: '#52525B', border: 'none', fontSize: '10px', cursor: 'pointer' }}>✕</button>
                             </div>
                           ) : (
                             <button
                               onClick={() => setResetPwId(u.id)}
-                              className="text-xs px-2 py-1 rounded text-[var(--sf-text-secondary)] hover:bg-[var(--sf-bg-secondary)]"
+                              style={{ background: 'none', color: '#52525B', border: '1px solid #27272A', padding: '4px 10px', borderRadius: '2px', fontSize: '9px', letterSpacing: '0.08em', cursor: 'pointer' }}
                             >
-                              Reset PW
+                              RESET PW
                             </button>
                           )}
                           {u.id !== currentUser?.id && u.is_active && (
-                            <button
-                              onClick={() => {
-                                if (confirm(`Deactivate user "${u.username}"?`)) {
-                                  deleteMutation.mutate(u.id);
-                                }
-                              }}
-                              className="text-xs px-2 py-1 rounded text-red-400 hover:bg-red-500/10"
-                            >
-                              Disable
-                            </button>
+                            deletePendingId === u.id ? (
+                              <div style={{ display: 'flex', gap: '4px' }}>
+                                <button onClick={() => deleteMutation.mutate(u.id)} style={{ background: '#280A08', color: '#FF3B30', border: '1px solid #FF3B3040', padding: '4px 8px', borderRadius: '2px', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>CONFIRM</button>
+                                <button onClick={() => setDeletePendingId(null)} style={{ background: 'none', color: '#52525B', border: '1px solid #27272A', padding: '4px 8px', borderRadius: '2px', fontSize: '9px', cursor: 'pointer' }}>✕</button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setDeletePendingId(u.id)}
+                                style={{ background: 'none', color: '#FF3B3060', border: '1px solid #FF3B3020', padding: '4px 10px', borderRadius: '2px', fontSize: '9px', letterSpacing: '0.08em', cursor: 'pointer' }}
+                                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#FF3B30'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#FF3B3050'; }}
+                                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = '#FF3B3060'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#FF3B3020'; }}
+                              >
+                                DISABLE
+                              </button>
+                            )
                           )}
                         </>
                       )}
