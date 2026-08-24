@@ -43,8 +43,13 @@ RUN apk add --no-cache gcc git curl python3-dev musl-dev openssl-dev libffi-dev 
     libxslt-dev libxml2-dev jpeg-dev openjpeg-dev zlib-dev cargo rust swig tinyxml-dev
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-COPY $REQUIREMENTS requirements.txt ./
-RUN pip install -U pip && pip install -r requirements.txt
+# Copy both files at their original paths so REQUIREMENTS can select either.
+# (A single `COPY $REQUIREMENTS requirements.txt ./` flattens both sources onto
+# the same destination name, so the base file always won and
+# --build-arg REQUIREMENTS=test/requirements.txt silently had no effect.)
+COPY requirements.txt ./requirements.txt
+COPY test/requirements.txt ./test/requirements.txt
+RUN pip install -U pip && pip install -r $REQUIREMENTS
 
 # Stage 3: Final image
 FROM python:3.12-alpine
