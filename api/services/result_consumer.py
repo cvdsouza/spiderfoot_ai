@@ -340,13 +340,15 @@ class ResultConsumerManager:
                         )
                         consumer.stop()
                         self.consumers.pop(scan_id)
-                        # Run correlations before marking complete — same as the
-                        # normal FINISHED lifecycle path in ConsumerThread.
-                        _run_correlations(self.dbh, self.config, scan_id)
+                        # Mark FINISHED before running correlations — the
+                        # correlator rejects scans still marked RUNNING.  Same
+                        # order as the normal FINISHED lifecycle path.
                         try:
                             self.dbh.scanInstanceSet(scan_id, status='FINISHED', ended=int(now * 1000))
                         except Exception as e:
                             log.error(f"Failed to mark stale scan {scan_id} as FINISHED: {e}")
+                            continue
+                        _run_correlations(self.dbh, self.config, scan_id)
 
                 # ── Step 5: cleanup offline workers every 2 minutes ──────
                 current_time = time.time()
@@ -582,13 +584,18 @@ class ConsumerThread(threading.Thread):
                 log.info(f"Received lifecycle {lifecycle} for scan {scan_id}")
                 self.lifecycle_received = True
                 if lifecycle == 'FINISHED':
-                    # Run correlations before marking complete.  In stateless
-                    # worker mode sfp__stor_db is removed from the modlist so
-                    # the worker's local DB is empty; all events are in the API
-                    # DB by the time we reach here, so we run correlations here
-                    # on the server side instead.
-                    self._run_correlations(scan_id)
+                    # Mark the scan FINISHED *before* running correlations.
+                    # SpiderFootCorrelator refuses to run against a scan whose
+                    # status is still RUNNING, so the reverse order makes every
+                    # rule fail.  This matches sfscan.py, which also sets
+                    # FINISHED first and then calls runCorrelations().
+                    #
+                    # In stateless worker mode sfp__stor_db is removed from the
+                    # modlist so the worker's local DB is empty; all events are
+                    # in the API DB by the time we reach here, so correlations
+                    # run here on the server side instead.
                     self.dbh.scanInstanceSet(scan_id, status='FINISHED', ended=int(time.time() * 1000))
+                    self._run_correlations(scan_id)
                     # Stop consuming after FINISHED
                     self.stop()
                 elif lifecycle == 'FAILED':
