@@ -67,6 +67,10 @@ class sfp__stor_rabbitmq(SpiderFootPlugin):
         self.connection = None
         self.channel = None
 
+        # finish() is invoked once per final pass by sfscan.py (3 passes),
+        # so guard against publishing duplicate FINISHED lifecycle messages.
+        self.finished_published = False
+
         if not self.rabbitmq_url:
             self.error("RABBITMQ_URL not set — cannot publish results")
             return
@@ -196,14 +200,23 @@ class sfp__stor_rabbitmq(SpiderFootPlugin):
             except Exception as reconnect_error:
                 self.error(f"Failed to reconnect to RabbitMQ: {reconnect_error}")
 
-    def finished(self):
-        """Called when scan finishes. Send lifecycle FINISHED message.
+    def finish(self):
+        """Called when the scan finishes. Send the lifecycle FINISHED message.
+
+        Overrides SpiderFootPlugin.finish(), which threadWorker() invokes when
+        it receives the 'FINISHED' sentinel on the incoming event queue.  The
+        name must stay 'finish' — a mismatched name silently makes this a
+        no-op and leaves the scan stuck at RUNNING until the API server's
+        stale-consumer watchdog fires 10 minutes later.
 
         Attempts to publish the FINISHED message, reconnecting once if the
         connection was lost during the scan (e.g. due to a broken pipe in
         the log handler).  Without this retry the scan status can get stuck
         at RUNNING indefinitely.
         """
+        if self.finished_published:
+            return
+
         scan_id = self.getScanId()
 
         message = {
@@ -237,6 +250,7 @@ class sfp__stor_rabbitmq(SpiderFootPlugin):
                 )
                 self.info(f"Published FINISHED lifecycle message for scan {scan_id}")
                 published = True
+                self.finished_published = True
                 break
             except Exception as e:
                 self.error(f"Failed to publish FINISHED message (attempt {attempt + 1}): {e}")
