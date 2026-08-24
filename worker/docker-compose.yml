@@ -29,9 +29,10 @@ services:
     command: ["worker.py", "--queue", "fast", "--concurrency", "${WORKER_FAST_CONCURRENCY:-2}"]
     volumes:
       # CA certificate for RabbitMQ TLS verification.
-      # Default ../certs/ca.crt works for local deployments.
+      # Default ./certs/ca.crt resolves against the Compose project directory,
+      # which worker/start.sh sets to the repo root in local mode.
       # Set RABBITMQ_CA_CERT_HOST=/host/path/ca.crt for remote deployments.
-      - "${RABBITMQ_CA_CERT_HOST:-../certs/ca.crt}:/etc/rabbitmq/certs/ca.crt:ro"
+      - "${RABBITMQ_CA_CERT_HOST:-./certs/ca.crt}:/etc/rabbitmq/certs/ca.crt:ro"
     environment:
       RABBITMQ_URL: "${RABBITMQ_URL:-amqps://spiderfoot:spiderfoot@rabbitmq:5671/}"
       RABBITMQ_CA_CERT: "/etc/rabbitmq/certs/ca.crt"
@@ -49,9 +50,10 @@ services:
     command: ["worker.py", "--queue", "slow", "--concurrency", "${WORKER_SLOW_CONCURRENCY:-1}"]
     volumes:
       # CA certificate for RabbitMQ TLS verification.
-      # Default ../certs/ca.crt works for local deployments.
+      # Default ./certs/ca.crt resolves against the Compose project directory,
+      # which worker/start.sh sets to the repo root in local mode.
       # Set RABBITMQ_CA_CERT_HOST=/host/path/ca.crt for remote deployments.
-      - "${RABBITMQ_CA_CERT_HOST:-../certs/ca.crt}:/etc/rabbitmq/certs/ca.crt:ro"
+      - "${RABBITMQ_CA_CERT_HOST:-./certs/ca.crt}:/etc/rabbitmq/certs/ca.crt:ro"
     environment:
       RABBITMQ_URL: "${RABBITMQ_URL:-amqps://spiderfoot:spiderfoot@rabbitmq:5671/}"
       RABBITMQ_CA_CERT: "/etc/rabbitmq/certs/ca.crt"
