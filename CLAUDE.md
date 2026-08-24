@@ -51,7 +51,17 @@ docker compose -f docker-compose.yml -f docker-compose-dev.yml up
 ./start-worker.sh --fast 2 --slow 1 --detach
 ```
 
-The app listens on **https://localhost:5001**. Default credentials: `admin` / `changeme` (set via env vars `SPIDERFOOT_ADMIN_USER` / `SPIDERFOOT_ADMIN_PASSWORD`).
+The app listens on **http://localhost:5001**. Default credentials: `admin` / `changeme` (set via env vars `SPIDERFOOT_ADMIN_USER` / `SPIDERFOOT_ADMIN_PASSWORD`).
+
+TLS on the web UI is opt-in: `sf.py` serves HTTPS only if both `spiderfoot.key` and
+`spiderfoot.crt` are present in the data directory (`/var/lib/spiderfoot`); otherwise it
+serves plain HTTP. This is separate from the RabbitMQ certificates in `certs/`, which
+only secure the broker connection.
+
+On startup the app logs `Warning: passwd file contains no passwords. Authentication
+disabled.` — this is a **stale check** left over from the CherryPy UI (`sf.py:505`) and is
+misleading. JWT authentication is enforced by `api/middleware/auth.py` regardless; API
+requests without a bearer token get a 401.
 
 ### Frontend dev server (hot reload)
 ```bash
@@ -87,7 +97,7 @@ The production FastAPI app serves the built `frontend/dist/` as a SPA fallback.
 | `workers.py` | `/api/v1/workers` | Worker heartbeat + status |
 | `ai_analysis.py` | `/api/v1/ai` | AI scan analysis (OpenAI / Anthropic) |
 | `correlation_rules.py` | `/api/v1/correlation-rules` | YAML rule CRUD |
-| `system.py` | `/api/v1/system` | Version, health |
+| `system.py` | `/api/v1` (no sub-prefix) | `ping`, `query`, `vacuum` — no health route |
 | `legacy.py` | `/` (flat) | Backward-compat routes for `sfcli.py` |
 
 ### App state
@@ -210,13 +220,42 @@ Avoid `bg-{color}-500/10 text-{color}-400` — those are invisible in light mode
 
 `worker.py` is a standalone Python process. It:
 1. Connects to RabbitMQ over AMQPS (TLS, port 5671)
-2. Consumes from `sf.fast` or `sf.slow` queue
+2. Consumes from the `scans.fast` or `scans.slow` queue
 3. Runs `SpiderFootScanner` locally (same code as the main server)
-4. Writes results directly to the shared SQLite DB (same volume)
-5. Publishes a completion message back to the API server
+4. Publishes each result event to the `scan.results` exchange (routing key = scan ID)
+5. Publishes a `FINISHED` lifecycle message when the scan completes
 6. Sends heartbeats to `POST /api/v1/workers/heartbeat`
 
-Workers are stateless — the DB is the shared state. Scale horizontally by running more `worker.py` processes.
+Workers are **stateless and have no database access**. `api/utils/scan_manager.py` swaps the
+mandatory storage module per mode: with RabbitMQ available it appends `sfp__stor_rabbitmq`
+and removes `sfp__stor_db`; without it, `sfp__stor_db` writes to the DB directly. The API
+server's `ResultConsumerManager` consumes the results queue and performs all DB writes.
+Scale horizontally by running more `worker.py` processes.
+
+### Distributed-scan gotchas
+
+These two are silent when broken — scans still "work", they just never complete correctly.
+
+- **`sfp__stor_rabbitmq.finish()` must be named `finish`, not `finished`.**
+  `SpiderFootPlugin.threadWorker()` calls `self.finish()` on the `'FINISHED'` sentinel; a
+  mismatched name makes it a no-op, the `FINISHED` lifecycle is never published, and every
+  scan sits at `RUNNING` until the `STALE_CONSUMER_TIMEOUT = 600` watchdog in
+  `result_consumer.py` fires 10 minutes later. `sfscan.py` sends the sentinel across 3 final
+  passes, so `finish()` is guarded to publish only once.
+- **Mark a scan `FINISHED` before running correlations, never after.**
+  `SpiderFootCorrelator.__init__` raises `ValueError` on any scan still marked `RUNNING`, so
+  the reverse order fails all 37 rules. `sfscan.py` sets the status first and then calls
+  `runCorrelations()`; `result_consumer.py` must match at both call sites (the lifecycle
+  handler and the stale-consumer watchdog).
+
+### Worker Compose paths
+
+Relative paths in `worker/docker-compose.yml` resolve against the **Compose project
+directory**, not the compose file's own directory. `worker/start.sh` sets
+`--project-directory` to the repo root in local mode, so the CA cert default must be
+`./certs/ca.crt`. Getting this wrong doesn't fail loudly — Docker auto-creates the missing
+bind source as an empty directory and `worker.py` falls back to `ssl.CERT_NONE`, i.e.
+encrypted but unauthenticated. Check for `TLS: CA cert not found` in the worker log.
 
 ```bash
 # Env vars for a worker
