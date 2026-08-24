@@ -197,7 +197,7 @@ def _publish_lifecycle(scan_id: str, lifecycle: str, rabbitmq_url: str) -> None:
     """Publish a lifecycle message (ABORTED / FAILED) to the results exchange.
 
     Called from run_scan_task()'s finally block when the scan ended in a
-    non-FINISHED state (abort or error).  sfp__stor_rabbitmq.finished() is
+    non-FINISHED state (abort or error).  sfp__stor_rabbitmq.finish() is
     only called during normal scan completion; for aborted/failed scans it is
     never invoked, so we publish the lifecycle here instead.
     """
